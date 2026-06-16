@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26 AS builder
 
 WORKDIR /src
 
@@ -12,9 +12,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /app/telegram-gateway .
 
 # Final execution stage
-FROM alpine:latest
-
-RUN apk add --no-cache ca-certificates
+FROM gcr.io/distroless/static-debian12
 
 WORKDIR /app
 COPY --from=builder /app/telegram-gateway .
