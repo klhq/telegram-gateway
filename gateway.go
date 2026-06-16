@@ -239,3 +239,15 @@ func (gw *Gateway) writeError(w http.ResponseWriter, statusCode int, message str
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(ErrorResponse{Error: message})
 }
+
+// HandleHealth handles GET /health requests
+func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		gw.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
+}
+

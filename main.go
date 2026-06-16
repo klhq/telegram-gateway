@@ -52,6 +52,7 @@ func main() {
 	// Setup HTTP server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/send", gw.HandleSend)
+	mux.HandleFunc("/health", gw.HandleHealth)
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,

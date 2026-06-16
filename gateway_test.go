@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -541,3 +542,22 @@ func TestCallbackQueryRoutingDown(t *testing.T) {
 		t.Error("expected answerCallbackQuery to be called")
 	}
 }
+
+func TestHealthEndpoint(t *testing.T) {
+	gw := &Gateway{}
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rr := httptest.NewRecorder()
+
+	handler := http.HandlerFunc(gw.HandleHealth)
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rr.Code)
+	}
+
+	expected := `{"status":"ok"}`
+	if strings.TrimSpace(rr.Body.String()) != expected {
+		t.Errorf("expected body '%s', got '%s'", expected, rr.Body.String())
+	}
+}
+
