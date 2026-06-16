@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -201,5 +202,342 @@ func TestSendEndpointTelegramError(t *testing.T) {
 	_ = json.Unmarshal(rr.Body.Bytes(), &respPayload)
 	if respPayload["error"] == nil {
 		t.Errorf("expected error key in response, got %s", rr.Body.String())
+	}
+}
+
+func TestCallbackQueryRoutingComboSuccess(t *testing.T) {
+	// 1. Start a mock strategy server for COMB_ARB
+	strategyCalled := false
+	strategyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		strategyCalled = true
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/callback" {
+			t.Errorf("expected path /callback, got %s", r.URL.Path)
+		}
+
+		var payload CallbackPayload
+		err := json.NewDecoder(r.Body).Decode(&payload)
+		if err != nil {
+			t.Errorf("failed to decode callback payload: %v", err)
+		}
+
+		if payload.Data != "combo:approve:ev1" {
+			t.Errorf("expected data 'combo:approve:ev1', got '%s'", payload.Data)
+		}
+		if payload.CallbackQueryID != "cb-123" {
+			t.Errorf("expected callback_query_id 'cb-123', got '%s'", payload.CallbackQueryID)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"Combo Approved!","show_alert":true}`))
+	}))
+	defer strategyServer.Close()
+
+	// 2. Start mock Telegram server
+	telegramAnswered := false
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/botmock-token/getMe" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+			return
+		}
+
+		if r.URL.Path == "/botmock-token/answerCallbackQuery" {
+			telegramAnswered = true
+			err := r.ParseForm()
+			if err != nil {
+				t.Errorf("failed to parse form: %v", err)
+			}
+			if r.FormValue("callback_query_id") != "cb-123" {
+				t.Errorf("expected callback_query_id 'cb-123', got '%s'", r.FormValue("callback_query_id"))
+			}
+			if r.FormValue("text") != "Combo Approved!" {
+				t.Errorf("expected text 'Combo Approved!', got '%s'", r.FormValue("text"))
+			}
+			if r.FormValue("show_alert") != "true" {
+				t.Errorf("expected show_alert 'true', got '%s'", r.FormValue("show_alert"))
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":true}`))
+			return
+		}
+	}))
+	defer telegramServer.Close()
+
+	botURL := telegramServer.URL + "/bot%s/%s"
+	bot, err := tgbotapi.NewBotAPIWithClient("mock-token", botURL, http.DefaultClient)
+	if err != nil {
+		t.Fatalf("failed to create BotAPI: %v", err)
+	}
+
+	cfg := &Config{
+		TelegramBotToken: "mock-token",
+		Port:             "8000",
+		CombArbURL:       strategyServer.URL + "/callback",
+		BookArbURL:       "http://localhost:9999/callback", // unused in this test
+	}
+	gw := &Gateway{
+		Bot:    bot,
+		Config: cfg,
+		Client: http.DefaultClient,
+	}
+
+	// 3. Simulate receiving an update
+	update := tgbotapi.Update{
+		UpdateID: 1,
+		CallbackQuery: &tgbotapi.CallbackQuery{
+			ID:   "cb-123",
+			Data: "combo:approve:ev1",
+			From: &tgbotapi.User{
+				ID:       555,
+				UserName: "user555",
+			},
+			Message: &tgbotapi.Message{
+				MessageID: 777,
+				Chat: &tgbotapi.Chat{
+					ID: 888,
+				},
+			},
+		},
+	}
+
+	gw.HandleUpdate(update)
+
+	if !strategyCalled {
+		t.Error("expected strategy callback to be called")
+	}
+	if !telegramAnswered {
+		t.Error("expected answerCallbackQuery to be called")
+	}
+}
+
+func TestCallbackQueryRoutingTimeout(t *testing.T) {
+	// 1. Mock a slow strategy server
+	strategyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Sleep for 6 seconds to trigger the 5-second gateway timeout
+		select {
+		case <-r.Context().Done():
+			// Request cancelled by client, which is expected
+		case <-time.After(6 * time.Second):
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer strategyServer.Close()
+
+	// 2. Start mock Telegram server
+	telegramAnswered := false
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/botmock-token/getMe" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+			return
+		}
+
+		if r.URL.Path == "/botmock-token/answerCallbackQuery" {
+			telegramAnswered = true
+			err := r.ParseForm()
+			if err != nil {
+				t.Errorf("failed to parse form: %v", err)
+			}
+			if r.FormValue("text") != "Strategy backend unreachable" {
+				t.Errorf("expected warning text, got '%s'", r.FormValue("text"))
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":true}`))
+			return
+		}
+	}))
+	defer telegramServer.Close()
+
+	botURL := telegramServer.URL + "/bot%s/%s"
+	bot, err := tgbotapi.NewBotAPIWithClient("mock-token", botURL, http.DefaultClient)
+	if err != nil {
+		t.Fatalf("failed to create BotAPI: %v", err)
+	}
+
+	cfg := &Config{
+		TelegramBotToken: "mock-token",
+		Port:             "8000",
+		CombArbURL:       strategyServer.URL + "/callback",
+	}
+	gw := &Gateway{
+		Bot:    bot,
+		Config: cfg,
+		Client: http.DefaultClient,
+	}
+
+	update := tgbotapi.Update{
+		UpdateID: 1,
+		CallbackQuery: &tgbotapi.CallbackQuery{
+			ID:   "cb-timeout",
+			Data: "combo:slow",
+			From: &tgbotapi.User{
+				ID: 555,
+			},
+			Message: &tgbotapi.Message{
+				MessageID: 777,
+				Chat: &tgbotapi.Chat{
+					ID: 888,
+				},
+			},
+		},
+	}
+
+	gw.HandleUpdate(update)
+
+	if !telegramAnswered {
+		t.Error("expected answerCallbackQuery to be called on timeout")
+	}
+}
+
+func TestCallbackQueryRoutingBookSuccess(t *testing.T) {
+	strategyCalled := false
+	strategyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		strategyCalled = true
+		var payload CallbackPayload
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload.Data != "book:decline:ev2" {
+			t.Errorf("expected data 'book:decline:ev2', got '%s'", payload.Data)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"Book Declined!","show_alert":false}`))
+	}))
+	defer strategyServer.Close()
+
+	telegramAnswered := false
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/botmock-token/getMe" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+			return
+		}
+		if r.URL.Path == "/botmock-token/answerCallbackQuery" {
+			telegramAnswered = true
+			if r.FormValue("text") != "Book Declined!" {
+				t.Errorf("expected 'Book Declined!', got '%s'", r.FormValue("text"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":true}`))
+			return
+		}
+	}))
+	defer telegramServer.Close()
+
+	botURL := telegramServer.URL + "/bot%s/%s"
+	bot, err := tgbotapi.NewBotAPIWithClient("mock-token", botURL, http.DefaultClient)
+	if err != nil {
+		t.Fatalf("failed to create BotAPI: %v", err)
+	}
+
+	cfg := &Config{
+		TelegramBotToken: "mock-token",
+		Port:             "8000",
+		BookArbURL:       strategyServer.URL + "/callback",
+	}
+	gw := &Gateway{
+		Bot:    bot,
+		Config: cfg,
+		Client: http.DefaultClient,
+	}
+
+	update := tgbotapi.Update{
+		UpdateID: 1,
+		CallbackQuery: &tgbotapi.CallbackQuery{
+			ID:   "cb-book-123",
+			Data: "book:decline:ev2",
+			From: &tgbotapi.User{
+				ID: 555,
+			},
+			Message: &tgbotapi.Message{
+				MessageID: 777,
+				Chat: &tgbotapi.Chat{
+					ID: 888,
+				},
+			},
+		},
+	}
+
+	gw.HandleUpdate(update)
+
+	if !strategyCalled {
+		t.Error("expected strategy callback to be called")
+	}
+	if !telegramAnswered {
+		t.Error("expected answerCallbackQuery to be called")
+	}
+}
+
+func TestCallbackQueryRoutingDown(t *testing.T) {
+	telegramAnswered := false
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/botmock-token/getMe" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+			return
+		}
+		if r.URL.Path == "/botmock-token/answerCallbackQuery" {
+			telegramAnswered = true
+			if r.FormValue("text") != "Strategy backend unreachable" {
+				t.Errorf("expected warning, got '%s'", r.FormValue("text"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":true}`))
+			return
+		}
+	}))
+	defer telegramServer.Close()
+
+	botURL := telegramServer.URL + "/bot%s/%s"
+	bot, err := tgbotapi.NewBotAPIWithClient("mock-token", botURL, http.DefaultClient)
+	if err != nil {
+		t.Fatalf("failed to create BotAPI: %v", err)
+	}
+
+	cfg := &Config{
+		TelegramBotToken: "mock-token",
+		Port:             "8000",
+		CombArbURL:       "http://localhost:12345/nonexistent-callback", // strategy server down
+	}
+	gw := &Gateway{
+		Bot:    bot,
+		Config: cfg,
+		Client: http.DefaultClient,
+	}
+
+	update := tgbotapi.Update{
+		UpdateID: 1,
+		CallbackQuery: &tgbotapi.CallbackQuery{
+			ID:   "cb-down-123",
+			Data: "combo:approve:ev1",
+			From: &tgbotapi.User{
+				ID: 555,
+			},
+			Message: &tgbotapi.Message{
+				MessageID: 777,
+				Chat: &tgbotapi.Chat{
+					ID: 888,
+				},
+			},
+		},
+	}
+
+	gw.HandleUpdate(update)
+
+	if !telegramAnswered {
+		t.Error("expected answerCallbackQuery to be called")
 	}
 }

@@ -1,8 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
+	"strings"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -31,6 +37,22 @@ type SendResponse struct {
 // ErrorResponse represents the error response body
 type ErrorResponse struct {
 	Error string `json:"error"`
+}
+
+// CallbackPayload represents the simplified JSON payload forwarded to the strategy service
+type CallbackPayload struct {
+	CallbackQueryID string `json:"callback_query_id"`
+	FromID          int64  `json:"from_id"`
+	Username        string `json:"username"`
+	ChatID          int64  `json:"chat_id"`
+	MessageID       int    `json:"message_id"`
+	Data            string `json:"data"`
+}
+
+// StrategyResponse represents the optional JSON response from the strategy service
+type StrategyResponse struct {
+	Text      string `json:"text,omitempty"`
+	ShowAlert bool   `json:"show_alert,omitempty"`
 }
 
 // HandleSend handles POST /send requests and routes them to the Telegram Bot API
@@ -83,6 +105,133 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// StartUpdateLoop starts the long-polling loop to get updates from Telegram
+func (gw *Gateway) StartUpdateLoop(ctx context.Context) {
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 30 // seconds
+
+	log.Println("Starting Telegram updates polling loop...")
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Stopping Telegram updates polling loop...")
+			return
+		default:
+			updates, err := gw.Bot.GetUpdates(u)
+			if err != nil {
+				// If the loop was canceled during updates fetch, exit cleanly
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				log.Printf("Error getting updates from Telegram: %v", err)
+				time.Sleep(1 * time.Second) // rate limiting/backoff
+				continue
+			}
+
+			for _, update := range updates {
+				gw.HandleUpdate(update)
+
+				if update.UpdateID >= u.Offset {
+					u.Offset = update.UpdateID + 1
+				}
+			}
+		}
+	}
+}
+
+// HandleUpdate processes a single incoming update from Telegram
+func (gw *Gateway) HandleUpdate(update tgbotapi.Update) {
+	if update.CallbackQuery == nil {
+		log.Printf("Received non-callback update: %d", update.UpdateID)
+		return
+	}
+
+	cb := update.CallbackQuery
+	data := cb.Data
+
+	var targetURL string
+	if strings.HasPrefix(data, "combo:") {
+		targetURL = gw.Config.CombArbURL
+	} else if strings.HasPrefix(data, "book:") {
+		targetURL = gw.Config.BookArbURL
+	} else {
+		log.Printf("Warning: Received callback query with unknown prefix: %s", data)
+		gw.answerCallback(cb.ID, "Unknown callback query prefix", true)
+		return
+	}
+
+	// Prepare simplified payload
+	payload := CallbackPayload{
+		CallbackQueryID: cb.ID,
+		FromID:          cb.From.ID,
+		Username:        cb.From.UserName,
+		Data:            cb.Data,
+	}
+	if cb.Message != nil {
+		payload.ChatID = cb.Message.Chat.ID
+		payload.MessageID = cb.Message.MessageID
+	}
+
+	// Forward payload to the strategy backend via POST with 5s timeout
+	err := gw.forwardCallbackToStrategy(targetURL, payload)
+	if err != nil {
+		log.Printf("Error forwarding callback to %s: %v", targetURL, err)
+		gw.answerCallback(cb.ID, "Strategy backend unreachable", true)
+	}
+}
+
+// forwardCallbackToStrategy POSTs payload to strategy and answers the Telegram callback query accordingly
+func (gw *Gateway) forwardCallbackToStrategy(targetURL string, payload CallbackPayload) error {
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal callback payload: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := gw.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("strategy returned status code %d", resp.StatusCode)
+	}
+
+	// Read optional response JSON
+	var stratResp StrategyResponse
+	dec := json.NewDecoder(resp.Body)
+	if err := dec.Decode(&stratResp); err != nil {
+		// Response is empty or not JSON, which is acceptable. Acknowledge with empty string.
+		gw.answerCallback(payload.CallbackQueryID, "", false)
+		return nil
+	}
+
+	gw.answerCallback(payload.CallbackQueryID, stratResp.Text, stratResp.ShowAlert)
+	return nil
+}
+
+// answerCallback calls Telegram's answerCallbackQuery method to acknowledge the callback
+func (gw *Gateway) answerCallback(callbackQueryID string, text string, showAlert bool) {
+	callbackConfig := tgbotapi.NewCallback(callbackQueryID, text)
+	callbackConfig.ShowAlert = showAlert
+
+	_, err := gw.Bot.Request(callbackConfig)
+	if err != nil {
+		log.Printf("Error answering callback query %s: %v", callbackQueryID, err)
+	}
 }
 
 func (gw *Gateway) writeError(w http.ResponseWriter, statusCode int, message string) {
