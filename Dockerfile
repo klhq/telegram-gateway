@@ -14,8 +14,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /app/telegram-gateway 
 # Final execution stage
 FROM alpine:latest
 
-# Install ca-certificates required for HTTPS connections to the Telegram API
-RUN apk --no-reachable-uri add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 COPY --from=builder /app/telegram-gateway .
