@@ -70,8 +70,12 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.ChatID == 0 {
-		gw.writeError(w, http.StatusBadRequest, "chat_id is required")
-		return
+		if gw.Config.TelegramChatID != 0 {
+			req.ChatID = gw.Config.TelegramChatID
+		} else {
+			gw.writeError(w, http.StatusBadRequest, "chat_id is required")
+			return
+		}
 	}
 	if req.Text == "" {
 		gw.writeError(w, http.StatusBadRequest, "text is required")

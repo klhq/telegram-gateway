@@ -10,6 +10,7 @@ import (
 // Config holds all gateway configuration loaded from environment variables
 type Config struct {
 	TelegramBotToken string
+	TelegramChatID   int64
 	Port             string
 	CombArbURL       string
 	BookArbURL       string
@@ -23,6 +24,15 @@ func LoadConfig() (*Config, error) {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
 		return nil, fmt.Errorf("TELEGRAM_BOT_TOKEN environment variable is required")
+	}
+
+	var chatID int64
+	chatIDStr := os.Getenv("TELEGRAM_CHAT_ID")
+	if chatIDStr != "" {
+		_, err := fmt.Sscan(chatIDStr, &chatID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse TELEGRAM_CHAT_ID: %w", err)
+		}
 	}
 
 	port := os.Getenv("PORT")
@@ -42,6 +52,7 @@ func LoadConfig() (*Config, error) {
 
 	return &Config{
 		TelegramBotToken: token,
+		TelegramChatID:   chatID,
 		Port:             port,
 		CombArbURL:       combArbURL,
 		BookArbURL:       bookArbURL,
