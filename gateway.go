@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -334,6 +337,14 @@ func (gw *Gateway) forwardCallbackToStrategy(prefix string, targetURL string, pa
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+
+	// If webhook secret is configured, sign the request body with HMAC-SHA256
+	if gw.Config.WebhookSecret != "" {
+		mac := hmac.New(sha256.New, []byte(gw.Config.WebhookSecret))
+		mac.Write(bodyBytes)
+		signature := hex.EncodeToString(mac.Sum(nil))
+		req.Header.Set("X-Gateway-Signature", signature)
+	}
 
 	startTime := time.Now()
 	resp, err := gw.Client.Do(req)

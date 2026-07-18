@@ -1,8 +1,12 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -27,6 +31,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	port := flag.String("port", "8081", "Port to listen on")
+	secret := flag.String("secret", "", "Shared webhook signing secret key for validating requests")
 	flag.Parse()
 
 	http.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
@@ -35,8 +40,39 @@ func main() {
 			return
 		}
 
+		// Read the raw body bytes for signature validation
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			slog.Error("Failed to read request body", "error", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		// Perform Webhook Signature Verification if secret is configured
+		if *secret != "" {
+			receivedSig := r.Header.Get("X-Gateway-Signature")
+			if receivedSig == "" {
+				slog.Warn("Rejected callback: X-Gateway-Signature header is missing")
+				http.Error(w, "Missing Signature", http.StatusUnauthorized)
+				return
+			}
+
+			// Compute HMAC-SHA256 signature
+			mac := hmac.New(sha256.New, []byte(*secret))
+			mac.Write(bodyBytes)
+			expectedSig := hex.EncodeToString(mac.Sum(nil))
+
+			// Constant-time comparison to prevent timing attacks
+			if !hmac.Equal([]byte(receivedSig), []byte(expectedSig)) {
+				slog.Warn("Rejected callback: Invalid signature", "received", receivedSig, "expected", expectedSig)
+				http.Error(w, "Invalid Signature", http.StatusUnauthorized)
+				return
+			}
+		}
+
+		// Decode the JSON payload
 		var payload CallbackPayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
 			slog.Error("Failed to decode callback payload", "error", err)
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
@@ -47,6 +83,7 @@ func main() {
 			"from_id", payload.FromID,
 			"username", payload.Username,
 			"data", payload.Data,
+			"verified", *secret != "",
 		)
 
 		resp := StrategyResponse{
@@ -59,7 +96,7 @@ func main() {
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	slog.Info("Starting Mock Strategy Server", "port", *port)
+	slog.Info("Starting Mock Strategy Server", "port", *port, "signing_validation_enabled", *secret != "")
 	if err := http.ListenAndServe(":"+*port, nil); err != nil {
 		slog.Error("Mock Strategy Server error", "error", err)
 		os.Exit(1)

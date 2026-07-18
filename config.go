@@ -20,6 +20,7 @@ type Config struct {
 	GatewayAPIKey    string            `json:"gateway_api_key"`
 	Routes           map[string]string `json:"routes"`
 	RateLimits       RateLimits        `json:"rate_limits"`
+	WebhookSecret    string            `json:"webhook_secret"`
 }
 
 // LoadConfig loads the configuration from a JSON file path

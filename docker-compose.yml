@@ -20,7 +20,7 @@ services:
     volumes:
       - .:/src
     working_dir: /src
-    command: go run ./cmd/mock-strategy/main.go -port 8081
+    command: go run ./cmd/mock-strategy/main.go -port 8081 -secret dev-webhook-secret
     ports:
       - "8081:8081"
 
@@ -29,7 +29,7 @@ services:
     volumes:
       - .:/src
     working_dir: /src
-    command: go run ./cmd/mock-strategy/main.go -port 8082
+    command: go run ./cmd/mock-strategy/main.go -port 8082 -secret dev-webhook-secret
     ports:
       - "8082:8082"
 

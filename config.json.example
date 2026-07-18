@@ -3,6 +3,7 @@
   "telegram_chat_id": 123456789,
   "port": "8000",
   "gateway_api_key": "optional-shared-secret-key-for-auth",
+  "webhook_secret": "optional-shared-webhook-signing-secret",
   "routes": {
     "strategy-a": "http://localhost:8001/callback",
     "strategy-b": "http://localhost:8002/callback"

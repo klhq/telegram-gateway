@@ -2,7 +2,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -639,5 +643,83 @@ func TestRequireAuth_WrongToken_Returns401(t *testing.T) {
 				t.Errorf("expected 401, got %d. Body: %s", rr.Code, rr.Body.String())
 			}
 		})
+	}
+}
+
+func TestCallbackQuerySigning(t *testing.T) {
+	secret := "test-webhook-secret"
+	var signatureReceived string
+	var bodyReceived []byte
+
+	strategyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		signatureReceived = r.Header.Get("X-Gateway-Signature")
+		var err error
+		bodyReceived, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("failed to read body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer strategyServer.Close()
+
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/botmock-token/getMe" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+			return
+		}
+		if r.URL.Path == "/botmock-token/answerCallbackQuery" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":true}`))
+			return
+		}
+	}))
+	defer telegramServer.Close()
+
+	botURL := telegramServer.URL + "/bot%s/%s"
+	bot, err := tgbotapi.NewBotAPIWithClient("mock-token", botURL, http.DefaultClient)
+	if err != nil {
+		t.Fatalf("failed to create BotAPI: %v", err)
+	}
+
+	cfg := &Config{
+		TelegramBotToken: "mock-token",
+		Port:             "8000",
+		WebhookSecret:    secret,
+		Routes: map[string]string{
+			"combo": strategyServer.URL + "/callback",
+		},
+	}
+	gw := &Gateway{
+		Bot:    bot,
+		Config: cfg,
+		Client: http.DefaultClient,
+	}
+
+	update := tgbotapi.Update{
+		UpdateID: 1,
+		CallbackQuery: &tgbotapi.CallbackQuery{
+			ID:   "cb-signing",
+			Data: "combo:action",
+			From: &tgbotapi.User{
+				ID: 555,
+			},
+		},
+	}
+
+	gw.HandleUpdate(update)
+
+	if signatureReceived == "" {
+		t.Fatal("expected X-Gateway-Signature header, got empty")
+	}
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(bodyReceived)
+	expectedSig := hex.EncodeToString(mac.Sum(nil))
+
+	if signatureReceived != expectedSig {
+		t.Errorf("expected signature '%s', got '%s'", expectedSig, signatureReceived)
 	}
 }
