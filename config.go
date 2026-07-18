@@ -1,64 +1,49 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
-
-	"github.com/joho/godotenv"
 )
 
-// Config holds all gateway configuration loaded from environment variables
+// Config holds all gateway configuration loaded from a JSON file
 type Config struct {
-	TelegramBotToken string
-	TelegramChatID   int64
-	Port             string
-	CombArbURL       string
-	BookArbURL       string
-	GatewayAPIKey    string // optional shared secret for POST /send
+	TelegramBotToken string            `json:"telegram_bot_token"`
+	TelegramChatID   int64             `json:"telegram_chat_id"`
+	Port             string            `json:"port"`
+	GatewayAPIKey    string            `json:"gateway_api_key"`
+	Routes           map[string]string `json:"routes"`
 }
 
-// LoadConfig loads the configuration from the environment and optional .env file
-func LoadConfig() (*Config, error) {
-	// Attempt to load .env file if it exists, but don't error if it's missing
-	_ = godotenv.Load()
-
-	token := os.Getenv("TELEGRAM_BOT_TOKEN")
-	if token == "" {
-		return nil, fmt.Errorf("TELEGRAM_BOT_TOKEN environment variable is required")
+// LoadConfig loads the configuration from a JSON file path
+func LoadConfig(path string) (*Config, error) {
+	if path == "" {
+		path = "config.json"
 	}
 
-	var chatID int64
-	chatIDStr := os.Getenv("TELEGRAM_CHAT_ID")
-	if chatIDStr != "" {
-		_, err := fmt.Sscan(chatIDStr, &chatID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse TELEGRAM_CHAT_ID: %w", err)
-		}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file at %s: %w", path, err)
 	}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8000"
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse config json: %w", err)
 	}
 
-	combArbURL := os.Getenv("COMB_ARB_URL")
-	if combArbURL == "" {
-		combArbURL = "http://localhost:8001/callback"
+	// Validate required fields
+	if cfg.TelegramBotToken == "" {
+		return nil, fmt.Errorf("telegram_bot_token is required")
 	}
 
-	bookArbURL := os.Getenv("BOOK_ARB_URL")
-	if bookArbURL == "" {
-		bookArbURL = "http://localhost:8002/callback"
+	if cfg.Port == "" {
+		cfg.Port = "8000" // Default port
 	}
 
-	gatewayAPIKey := os.Getenv("GATEWAY_API_KEY")
+	if cfg.Routes == nil {
+		cfg.Routes = make(map[string]string)
+	}
 
-	return &Config{
-		TelegramBotToken: token,
-		TelegramChatID:   chatID,
-		Port:             port,
-		CombArbURL:       combArbURL,
-		BookArbURL:       bookArbURL,
-		GatewayAPIKey:    gatewayAPIKey,
-	}, nil
+	return &cfg, nil
 }
+

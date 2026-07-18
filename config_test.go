@@ -2,23 +2,28 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestLoadConfig(t *testing.T) {
-	// Set required env var
-	os.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
-	defer os.Unsetenv("TELEGRAM_BOT_TOKEN")
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.json")
 
-	// Set optional env vars
-	os.Setenv("PORT", "9000")
-	defer os.Unsetenv("PORT")
-	os.Setenv("COMB_ARB_URL", "http://comb:8001/callback")
-	defer os.Unsetenv("COMB_ARB_URL")
-	os.Setenv("BOOK_ARB_URL", "http://book:8002/callback")
-	defer os.Unsetenv("BOOK_ARB_URL")
+	content := `{
+		"telegram_bot_token": "test-token",
+		"port": "9000",
+		"routes": {
+			"combo": "http://comb:8001/callback",
+			"book": "http://book:8002/callback"
+		}
+	}`
 
-	cfg, err := LoadConfig()
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write config test file: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
@@ -29,24 +34,27 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.Port != "9000" {
 		t.Errorf("expected Port to be '9000', got '%s'", cfg.Port)
 	}
-	if cfg.CombArbURL != "http://comb:8001/callback" {
-		t.Errorf("expected CombArbURL to be 'http://comb:8001/callback', got '%s'", cfg.CombArbURL)
+	if cfg.Routes["combo"] != "http://comb:8001/callback" {
+		t.Errorf("expected combo route, got '%s'", cfg.Routes["combo"])
 	}
-	if cfg.BookArbURL != "http://book:8002/callback" {
-		t.Errorf("expected BookArbURL to be 'http://book:8002/callback', got '%s'", cfg.BookArbURL)
+	if cfg.Routes["book"] != "http://book:8002/callback" {
+		t.Errorf("expected book route, got '%s'", cfg.Routes["book"])
 	}
 }
 
 func TestLoadConfigDefaults(t *testing.T) {
-	os.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
-	defer os.Unsetenv("TELEGRAM_BOT_TOKEN")
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.json")
 
-	// Clear optional env vars to test defaults
-	os.Unsetenv("PORT")
-	os.Unsetenv("COMB_ARB_URL")
-	os.Unsetenv("BOOK_ARB_URL")
+	content := `{
+		"telegram_bot_token": "test-token"
+	}`
 
-	cfg, err := LoadConfig()
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write config test file: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
@@ -54,19 +62,33 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.Port != "8000" {
 		t.Errorf("expected default Port '8000', got '%s'", cfg.Port)
 	}
-	if cfg.CombArbURL != "http://localhost:8001/callback" {
-		t.Errorf("expected default CombArbURL 'http://localhost:8001/callback', got '%s'", cfg.CombArbURL)
-	}
-	if cfg.BookArbURL != "http://localhost:8002/callback" {
-		t.Errorf("expected default BookArbURL 'http://localhost:8002/callback', got '%s'", cfg.BookArbURL)
+	if len(cfg.Routes) != 0 {
+		t.Errorf("expected empty routes map, got %v", cfg.Routes)
 	}
 }
 
 func TestLoadConfigMissingToken(t *testing.T) {
-	os.Unsetenv("TELEGRAM_BOT_TOKEN")
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.json")
 
-	_, err := LoadConfig()
+	content := `{
+		"port": "8000"
+	}`
+
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write config test file: %v", err)
+	}
+
+	_, err := LoadConfig(configPath)
 	if err == nil {
-		t.Error("expected error when TELEGRAM_BOT_TOKEN is missing")
+		t.Error("expected error when telegram_bot_token is missing")
 	}
 }
+
+func TestLoadConfigFileNotFound(t *testing.T) {
+	_, err := LoadConfig("nonexistent_config.json")
+	if err == nil {
+		t.Error("expected error when config file does not exist")
+	}
+}
+

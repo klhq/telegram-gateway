@@ -3,7 +3,8 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"flag"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,14 +12,31 @@ import (
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
-	log.Println("Starting Telegram Gateway...")
+	// Initialize structured logging (JSON handler by default for production)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
 
-	cfg, err := LoadConfig()
+	slog.Info("Starting Telegram Gateway...")
+
+	// Flag & environment configuration path parsing
+	var configPath string
+	flag.StringVar(&configPath, "config", "config.json", "path to config.json file")
+	flag.Parse()
+
+	if configPath == "config.json" {
+		if envPath := os.Getenv("CONFIG_PATH"); envPath != "" {
+			configPath = envPath
+		}
+	}
+
+	cfg, err := LoadConfig(configPath)
 	if err != nil {
-		log.Fatalf("Configuration error: %v", err)
+		slog.Error("Configuration error", "error", err)
+		os.Exit(1)
 	}
 
 	// Safe printing of token
@@ -29,16 +47,20 @@ func main() {
 		tokenDisplay = "set (too short to mask safely)"
 	}
 
-	log.Printf("Config loaded: PORT=%s, COMB_ARB_URL=%s, BOOK_ARB_URL=%s, TELEGRAM_BOT_TOKEN=%s",
-		cfg.Port, cfg.CombArbURL, cfg.BookArbURL, tokenDisplay)
+	slog.Info("Config loaded successfully",
+		"port", cfg.Port,
+		"routes_count", len(cfg.Routes),
+		"telegram_bot_token", tokenDisplay,
+	)
 
 	// Initialize Telegram Bot Client
 	bot, err := tgbotapi.NewBotAPI(cfg.TelegramBotToken)
 	if err != nil {
-		log.Fatalf("Failed to initialize Telegram Bot: %v", err)
+		slog.Error("Failed to initialize Telegram Bot", "error", err)
+		os.Exit(1)
 	}
 
-	log.Printf("Telegram Bot initialized: @%s (ID: %d)", bot.Self.UserName, bot.Self.ID)
+	slog.Info("Telegram Bot initialized", "username", bot.Self.UserName, "id", bot.Self.ID)
 
 	// Initialize Gateway
 	gw := &Gateway{
@@ -53,9 +75,10 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/send", gw.requireAuth(gw.HandleSend))
 	mux.HandleFunc("/health", gw.HandleHealth)
+	mux.Handle("/metrics", promhttp.Handler())
 
 	if cfg.GatewayAPIKey == "" {
-		log.Println("WARNING: GATEWAY_API_KEY is not set — /send endpoint is unauthenticated")
+		slog.Warn("GATEWAY_API_KEY is not set — /send endpoint is unauthenticated")
 	}
 
 	server := &http.Server{
@@ -76,28 +99,35 @@ func main() {
 
 	// Start HTTP server in background
 	go func() {
-		log.Printf("HTTP Gateway listening on port %s", cfg.Port)
+		slog.Info("HTTP Gateway listening", "port", cfg.Port)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("HTTP server error: %v", err)
+			slog.Error("HTTP server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
 	// Block until we receive a signal
 	sig := <-stopChan
-	log.Printf("Received signal %v. Initiating graceful shutdown...", sig)
+	slog.Info("Received shutdown signal. Initiating graceful shutdown...", "signal", sig.String())
 
 	// Stop updates polling loop
 	cancel()
+
+	// Wait for all in-flight update handlers to finish
+	slog.Info("Waiting for active update handlers to complete...")
+	gw.WG.Wait()
+	slog.Info("All active update handlers completed.")
 
 	// Shut down HTTP server with a 5-second timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Error shutting down HTTP server: %v", err)
+		slog.Error("Error shutting down HTTP server", "error", err)
 	} else {
-		log.Println("HTTP server shut down successfully.")
+		slog.Info("HTTP server shut down successfully.")
 	}
 
-	log.Println("Telegram Gateway stopped.")
+	slog.Info("Telegram Gateway stopped.")
 }
+

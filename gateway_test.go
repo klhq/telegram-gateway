@@ -280,8 +280,10 @@ func TestCallbackQueryRoutingComboSuccess(t *testing.T) {
 	cfg := &Config{
 		TelegramBotToken: "mock-token",
 		Port:             "8000",
-		CombArbURL:       strategyServer.URL + "/callback",
-		BookArbURL:       "http://localhost:9999/callback", // unused in this test
+		Routes: map[string]string{
+			"combo": strategyServer.URL + "/callback",
+			"book":  "http://localhost:9999/callback",
+		},
 	}
 	gw := &Gateway{
 		Bot:    bot,
@@ -368,7 +370,9 @@ func TestCallbackQueryRoutingTimeout(t *testing.T) {
 	cfg := &Config{
 		TelegramBotToken: "mock-token",
 		Port:             "8000",
-		CombArbURL:       strategyServer.URL + "/callback",
+		Routes: map[string]string{
+			"combo": strategyServer.URL + "/callback",
+		},
 	}
 	gw := &Gateway{
 		Bot:    bot,
@@ -445,7 +449,9 @@ func TestCallbackQueryRoutingBookSuccess(t *testing.T) {
 	cfg := &Config{
 		TelegramBotToken: "mock-token",
 		Port:             "8000",
-		BookArbURL:       strategyServer.URL + "/callback",
+		Routes: map[string]string{
+			"book": strategyServer.URL + "/callback",
+		},
 	}
 	gw := &Gateway{
 		Bot:    bot,
@@ -511,7 +517,9 @@ func TestCallbackQueryRoutingDown(t *testing.T) {
 	cfg := &Config{
 		TelegramBotToken: "mock-token",
 		Port:             "8000",
-		CombArbURL:       "http://localhost:12345/nonexistent-callback", // strategy server down
+		Routes: map[string]string{
+			"combo": "http://localhost:12345/nonexistent-callback",
+		},
 	}
 	gw := &Gateway{
 		Bot:    bot,

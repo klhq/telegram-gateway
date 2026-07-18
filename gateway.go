@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -19,6 +21,7 @@ type Gateway struct {
 	Bot    *tgbotapi.BotAPI
 	Config *Config
 	Client *http.Client
+	WG     sync.WaitGroup
 }
 
 // SendRequest represents the payload for POST /send
@@ -117,7 +120,7 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 
 	sentMsg, err := gw.Bot.Send(msg)
 	if err != nil {
-		log.Printf("Error sending message via Telegram: %v", err)
+		slog.Error("Error sending message via Telegram", "error", err, "chat_id", req.ChatID)
 		gw.writeError(w, http.StatusInternalServerError, "Failed to send message")
 		return
 	}
@@ -130,6 +133,7 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
+	metricSendRequests.WithLabelValues("200").Inc()
 }
 
 // StartUpdateLoop starts the long-polling loop to get updates from Telegram
@@ -137,12 +141,12 @@ func (gw *Gateway) StartUpdateLoop(ctx context.Context) {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 30 // seconds
 
-	log.Println("Starting Telegram updates polling loop...")
+	slog.Info("Starting Telegram updates polling loop...")
 	backoffAttempt := 0
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Stopping Telegram updates polling loop...")
+			slog.Info("Stopping Telegram updates polling loop...")
 			return
 		default:
 			updates, err := gw.Bot.GetUpdates(u)
@@ -162,7 +166,7 @@ func (gw *Gateway) StartUpdateLoop(ctx context.Context) {
 				backoffBase := time.Duration(backoffSec) * time.Second
 				jitter := time.Duration(rand.Int63n(int64(backoffBase) / 4)) //nolint:gosec
 				sleep := backoffBase + jitter
-				log.Printf("Error getting updates from Telegram: %v — retrying in %s", err, sleep)
+				slog.Error("Error getting updates from Telegram", "error", err, "retry_in", sleep)
 				backoffAttempt++
 				select {
 				case <-time.After(sleep):
@@ -175,10 +179,21 @@ func (gw *Gateway) StartUpdateLoop(ctx context.Context) {
 			backoffAttempt = 0
 
 			for _, update := range updates {
+				// Record metric for incoming update
+				if update.CallbackQuery != nil {
+					metricIncomingUpdates.WithLabelValues("callback").Inc()
+				} else {
+					metricIncomingUpdates.WithLabelValues("other").Inc()
+				}
+
 				// Dispatch each update in its own goroutine so a slow or hanging
 				// strategy backend cannot stall the polling loop.
 				update := update // capture loop variable
-				go gw.HandleUpdate(update)
+				gw.WG.Add(1)
+				go func(up tgbotapi.Update) {
+					defer gw.WG.Done()
+					gw.HandleUpdate(up)
+				}(update)
 
 				if update.UpdateID >= u.Offset {
 					u.Offset = update.UpdateID + 1
@@ -191,7 +206,7 @@ func (gw *Gateway) StartUpdateLoop(ctx context.Context) {
 // HandleUpdate processes a single incoming update from Telegram
 func (gw *Gateway) HandleUpdate(update tgbotapi.Update) {
 	if update.CallbackQuery == nil {
-		log.Printf("Received non-callback update: %d", update.UpdateID)
+		slog.Debug("Received non-callback update", "update_id", update.UpdateID)
 		return
 	}
 
@@ -199,13 +214,23 @@ func (gw *Gateway) HandleUpdate(update tgbotapi.Update) {
 	data := cb.Data
 
 	var targetURL string
-	if strings.HasPrefix(data, "combo:") {
-		targetURL = gw.Config.CombArbURL
-	} else if strings.HasPrefix(data, "book:") {
-		targetURL = gw.Config.BookArbURL
-	} else {
-		log.Printf("Warning: Received callback query with unknown prefix: %s", data)
+	var matchedPrefix string
+	for prefix, url := range gw.Config.Routes {
+		matchPrefix := prefix
+		if !strings.HasSuffix(matchPrefix, ":") {
+			matchPrefix = matchPrefix + ":"
+		}
+		if strings.HasPrefix(data, matchPrefix) {
+			targetURL = url
+			matchedPrefix = prefix
+			break
+		}
+	}
+
+	if targetURL == "" {
+		slog.Warn("Received callback query with unknown prefix", "data", data, "callback_id", cb.ID)
 		gw.answerCallback(cb.ID, "Unknown callback query prefix", true)
+		metricCallbackForward.WithLabelValues("unknown", "unknown_prefix").Inc()
 		return
 	}
 
@@ -222,17 +247,18 @@ func (gw *Gateway) HandleUpdate(update tgbotapi.Update) {
 	}
 
 	// Forward payload to the strategy backend via POST with 5s timeout
-	err := gw.forwardCallbackToStrategy(targetURL, payload)
+	err := gw.forwardCallbackToStrategy(matchedPrefix, targetURL, payload)
 	if err != nil {
-		log.Printf("Error forwarding callback to %s: %v", targetURL, err)
+		slog.Error("Error forwarding callback to strategy", "prefix", matchedPrefix, "target_url", targetURL, "error", err)
 		gw.answerCallback(cb.ID, "Strategy backend unreachable", true)
 	}
 }
 
 // forwardCallbackToStrategy POSTs payload to strategy and answers the Telegram callback query accordingly
-func (gw *Gateway) forwardCallbackToStrategy(targetURL string, payload CallbackPayload) error {
+func (gw *Gateway) forwardCallbackToStrategy(prefix string, targetURL string, payload CallbackPayload) error {
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
+		metricCallbackForward.WithLabelValues(prefix, "marshal_error").Inc()
 		return fmt.Errorf("failed to marshal callback payload: %w", err)
 	}
 
@@ -241,17 +267,24 @@ func (gw *Gateway) forwardCallbackToStrategy(targetURL string, payload CallbackP
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
 	if err != nil {
+		metricCallbackForward.WithLabelValues(prefix, "request_create_error").Inc()
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	startTime := time.Now()
 	resp, err := gw.Client.Do(req)
+	duration := time.Since(startTime).Seconds()
+	metricCallbackLatency.WithLabelValues(prefix).Observe(duration)
+
 	if err != nil {
+		metricCallbackForward.WithLabelValues(prefix, "transport_error").Inc()
 		return fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		metricCallbackForward.WithLabelValues(prefix, "status_"+strconv.Itoa(resp.StatusCode)).Inc()
 		return fmt.Errorf("strategy returned status code %d", resp.StatusCode)
 	}
 
@@ -261,10 +294,12 @@ func (gw *Gateway) forwardCallbackToStrategy(targetURL string, payload CallbackP
 	if err := dec.Decode(&stratResp); err != nil {
 		// Response is empty or not JSON, which is acceptable. Acknowledge with empty string.
 		gw.answerCallback(payload.CallbackQueryID, "", false)
+		metricCallbackForward.WithLabelValues(prefix, "success_empty").Inc()
 		return nil
 	}
 
 	gw.answerCallback(payload.CallbackQueryID, stratResp.Text, stratResp.ShowAlert)
+	metricCallbackForward.WithLabelValues(prefix, "success_response").Inc()
 	return nil
 }
 
@@ -275,7 +310,7 @@ func (gw *Gateway) answerCallback(callbackQueryID string, text string, showAlert
 
 	_, err := gw.Bot.Request(callbackConfig)
 	if err != nil {
-		log.Printf("Error answering callback query %s: %v", callbackQueryID, err)
+		slog.Error("Error answering callback query", "callback_query_id", callbackQueryID, "error", err)
 	}
 }
 
@@ -283,6 +318,7 @@ func (gw *Gateway) writeError(w http.ResponseWriter, statusCode int, message str
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(ErrorResponse{Error: message})
+	metricSendRequests.WithLabelValues(strconv.Itoa(statusCode)).Inc()
 }
 
 // HandleHealth handles GET /health requests
@@ -295,4 +331,5 @@ func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"ok"}`))
 }
+
 

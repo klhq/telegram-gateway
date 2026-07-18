@@ -20,5 +20,8 @@ COPY --from=builder /app/telegram-gateway .
 # Expose the gateway port
 EXPOSE 8000
 
+# Run as nonroot user for security
+USER 65532:65532
+
 # Run the binary
 ENTRYPOINT ["/app/telegram-gateway"]
