@@ -14,6 +14,7 @@ import (
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"golang.org/x/time/rate"
 )
 
 // Gateway holds the state for the HTTP server and Telegram bot client
@@ -22,6 +23,51 @@ type Gateway struct {
 	Config *Config
 	Client *http.Client
 	WG     sync.WaitGroup
+
+	// Rate Limiting
+	limiterOnce   sync.Once
+	globalLimiter *rate.Limiter
+	chatLimiters  map[int64]*rate.Limiter
+	chatMu        sync.RWMutex
+}
+
+// initRateLimiters initializes the global and per-chat rate limiters in a thread-safe lazy manner
+func (gw *Gateway) initRateLimiters() {
+	gw.limiterOnce.Do(func() {
+		globalLimit := 30.0
+		if gw.Config != nil {
+			if gw.Config.RateLimits.GlobalPerSecond > 0 {
+				globalLimit = gw.Config.RateLimits.GlobalPerSecond
+			}
+		}
+		gw.globalLimiter = rate.NewLimiter(rate.Limit(globalLimit), int(globalLimit))
+		gw.chatLimiters = make(map[int64]*rate.Limiter)
+	})
+}
+
+func (gw *Gateway) getChatLimiter(chatID int64) *rate.Limiter {
+	gw.initRateLimiters()
+	gw.chatMu.RLock()
+	lim, exists := gw.chatLimiters[chatID]
+	gw.chatMu.RUnlock()
+	if exists {
+		return lim
+	}
+
+	gw.chatMu.Lock()
+	defer gw.chatMu.Unlock()
+	// Double check
+	if lim, exists = gw.chatLimiters[chatID]; exists {
+		return lim
+	}
+
+	chatLimit := 1.0
+	if gw.Config != nil && gw.Config.RateLimits.ChatPerSecond > 0 {
+		chatLimit = gw.Config.RateLimits.ChatPerSecond
+	}
+	lim = rate.NewLimiter(rate.Limit(chatLimit), 3)
+	gw.chatLimiters[chatID] = lim
+	return lim
 }
 
 // SendRequest represents the payload for POST /send
@@ -102,6 +148,23 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Text == "" {
 		gw.writeError(w, http.StatusBadRequest, "text is required")
+		return
+	}
+
+	// Enforce global rate limit
+	ctx := r.Context()
+	gw.initRateLimiters()
+	if err := gw.globalLimiter.Wait(ctx); err != nil {
+		slog.Error("Global rate limiter wait error", "error", err)
+		gw.writeError(w, http.StatusTooManyRequests, "Rate limit wait timeout")
+		return
+	}
+
+	// Enforce per-chat rate limit
+	chatLimiter := gw.getChatLimiter(req.ChatID)
+	if err := chatLimiter.Wait(ctx); err != nil {
+		slog.Error("Chat rate limiter wait error", "error", err, "chat_id", req.ChatID)
+		gw.writeError(w, http.StatusTooManyRequests, "Rate limit wait timeout")
 		return
 	}
 

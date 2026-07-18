@@ -65,6 +65,12 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if len(cfg.Routes) != 0 {
 		t.Errorf("expected empty routes map, got %v", cfg.Routes)
 	}
+	if cfg.RateLimits.GlobalPerSecond != 30.0 {
+		t.Errorf("expected default GlobalPerSecond 30.0, got %f", cfg.RateLimits.GlobalPerSecond)
+	}
+	if cfg.RateLimits.ChatPerSecond != 1.0 {
+		t.Errorf("expected default ChatPerSecond 1.0, got %f", cfg.RateLimits.ChatPerSecond)
+	}
 }
 
 func TestLoadConfigMissingToken(t *testing.T) {

@@ -6,6 +6,12 @@ import (
 	"os"
 )
 
+// RateLimits holds configurations for rate limiters
+type RateLimits struct {
+	GlobalPerSecond float64 `json:"global_per_second"`
+	ChatPerSecond   float64 `json:"chat_per_second"`
+}
+
 // Config holds all gateway configuration loaded from a JSON file
 type Config struct {
 	TelegramBotToken string            `json:"telegram_bot_token"`
@@ -13,6 +19,7 @@ type Config struct {
 	Port             string            `json:"port"`
 	GatewayAPIKey    string            `json:"gateway_api_key"`
 	Routes           map[string]string `json:"routes"`
+	RateLimits       RateLimits        `json:"rate_limits"`
 }
 
 // LoadConfig loads the configuration from a JSON file path
@@ -44,6 +51,13 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.Routes = make(map[string]string)
 	}
 
+	// Defaults for rate limits
+	if cfg.RateLimits.GlobalPerSecond == 0 {
+		cfg.RateLimits.GlobalPerSecond = 30.0
+	}
+	if cfg.RateLimits.ChatPerSecond == 0 {
+		cfg.RateLimits.ChatPerSecond = 1.0
+	}
+
 	return &cfg, nil
 }
-
