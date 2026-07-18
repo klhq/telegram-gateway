@@ -145,4 +145,3 @@ func main() {
 
 	slog.Info("Telegram Gateway stopped.")
 }
-

@@ -100,4 +100,3 @@ func TestLoadConfigFileNotFound(t *testing.T) {
 		t.Error("expected error when config file does not exist")
 	}
 }
-
