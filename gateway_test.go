@@ -561,3 +561,75 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
+// ---------- requireAuth middleware tests ----------
+
+func TestRequireAuth_NoKeyConfigured_PassesThrough(t *testing.T) {
+	// When GatewayAPIKey is empty the middleware must let requests through.
+	gw := &Gateway{Config: &Config{}}
+	called := false
+	handler := gw.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/send", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	if !called {
+		t.Error("expected inner handler to be called")
+	}
+}
+
+func TestRequireAuth_CorrectToken_PassesThrough(t *testing.T) {
+	gw := &Gateway{Config: &Config{GatewayAPIKey: "secret123"}}
+	called := false
+	handler := gw.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/send", nil)
+	req.Header.Set("Authorization", "Bearer secret123")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	if !called {
+		t.Error("expected inner handler to be called")
+	}
+}
+
+func TestRequireAuth_WrongToken_Returns401(t *testing.T) {
+	gw := &Gateway{Config: &Config{GatewayAPIKey: "secret123"}}
+	handler := gw.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("inner handler should not be called on auth failure")
+	})
+
+	for _, tc := range []struct {
+		name   string
+		header string
+	}{
+		{"wrong token", "Bearer wrongtoken"},
+		{"missing header", ""},
+		{"no bearer prefix", "secret123"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/send", nil)
+			if tc.header != "" {
+				req.Header.Set("Authorization", tc.header)
+			}
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusUnauthorized {
+				t.Errorf("expected 401, got %d. Body: %s", rr.Code, rr.Body.String())
+			}
+		})
+	}
+}

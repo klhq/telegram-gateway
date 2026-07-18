@@ -14,6 +14,7 @@ type Config struct {
 	Port             string
 	CombArbURL       string
 	BookArbURL       string
+	GatewayAPIKey    string // optional shared secret for POST /send
 }
 
 // LoadConfig loads the configuration from the environment and optional .env file
@@ -50,11 +51,14 @@ func LoadConfig() (*Config, error) {
 		bookArbURL = "http://localhost:8002/callback"
 	}
 
+	gatewayAPIKey := os.Getenv("GATEWAY_API_KEY")
+
 	return &Config{
 		TelegramBotToken: token,
 		TelegramChatID:   chatID,
 		Port:             port,
 		CombArbURL:       combArbURL,
 		BookArbURL:       bookArbURL,
+		GatewayAPIKey:    gatewayAPIKey,
 	}, nil
 }

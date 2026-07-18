@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -55,6 +56,25 @@ type StrategyResponse struct {
 	ShowAlert bool   `json:"show_alert,omitempty"`
 }
 
+// requireAuth is middleware that validates the Bearer token in the Authorization header.
+// If GatewayAPIKey is empty the gateway is running in unauthenticated mode (warned at startup).
+func (gw *Gateway) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if gw.Config.GatewayAPIKey == "" {
+			// Auth not configured — allow through (operator was warned at startup)
+			next(w, r)
+			return
+		}
+		authorization := r.Header.Get("Authorization")
+		expected := "Bearer " + gw.Config.GatewayAPIKey
+		if authorization != expected {
+			gw.writeError(w, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+		next(w, r)
+	}
+}
+
 // HandleSend handles POST /send requests and routes them to the Telegram Bot API
 func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -97,7 +117,8 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 
 	sentMsg, err := gw.Bot.Send(msg)
 	if err != nil {
-		gw.writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("Error sending message via Telegram: %v", err)
+		gw.writeError(w, http.StatusInternalServerError, "Failed to send message")
 		return
 	}
 
@@ -117,6 +138,7 @@ func (gw *Gateway) StartUpdateLoop(ctx context.Context) {
 	u.Timeout = 30 // seconds
 
 	log.Println("Starting Telegram updates polling loop...")
+	backoffAttempt := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -131,13 +153,32 @@ func (gw *Gateway) StartUpdateLoop(ctx context.Context) {
 					return
 				default:
 				}
-				log.Printf("Error getting updates from Telegram: %v", err)
-				time.Sleep(1 * time.Second) // rate limiting/backoff
+				// Exponential backoff: 1s, 2s, 4s … capped at 30s, with ±25% jitter
+				capSec := 30
+				backoffSec := 1 << backoffAttempt
+				if backoffSec > capSec {
+					backoffSec = capSec
+				}
+				backoffBase := time.Duration(backoffSec) * time.Second
+				jitter := time.Duration(rand.Int63n(int64(backoffBase) / 4)) //nolint:gosec
+				sleep := backoffBase + jitter
+				log.Printf("Error getting updates from Telegram: %v — retrying in %s", err, sleep)
+				backoffAttempt++
+				select {
+				case <-time.After(sleep):
+				case <-ctx.Done():
+					return
+				}
 				continue
 			}
+			// Successful poll — reset backoff
+			backoffAttempt = 0
 
 			for _, update := range updates {
-				gw.HandleUpdate(update)
+				// Dispatch each update in its own goroutine so a slow or hanging
+				// strategy backend cannot stall the polling loop.
+				update := update // capture loop variable
+				go gw.HandleUpdate(update)
 
 				if update.UpdateID >= u.Offset {
 					u.Offset = update.UpdateID + 1

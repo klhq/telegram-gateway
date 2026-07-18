@@ -51,8 +51,12 @@ func main() {
 
 	// Setup HTTP server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/send", gw.HandleSend)
+	mux.HandleFunc("/send", gw.requireAuth(gw.HandleSend))
 	mux.HandleFunc("/health", gw.HandleHealth)
+
+	if cfg.GatewayAPIKey == "" {
+		log.Println("WARNING: GATEWAY_API_KEY is not set — /send endpoint is unauthenticated")
+	}
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
