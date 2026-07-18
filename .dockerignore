@@ -1,0 +1,19 @@
+.git
+.forgejo
+.gitignore
+.dockerignore
+LICENSE
+README.md
+openapi.yaml
+config.json.example
+docker-compose.yml
+docker/
+
+# Local configuration files (contains secrets)
+config.json
+.env
+
+# Built Go binaries & test artifacts
+*.test
+*.out
+**/mock-strategy
