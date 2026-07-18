@@ -28,3 +28,6 @@ telegram-gateway
 
 # OS files
 .DS_Store
+
+# Local configuration
+config.json
