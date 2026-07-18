@@ -1,0 +1,226 @@
+openapi: 3.0.3
+info:
+  title: Telegram Gateway API
+  description: |
+    A lightweight, high-performance, and generalized Telegram Gateway in Go.
+    It multiplexes message dispatching and dynamically routes callback queries for
+    multiple downstream strategies sharing a single Telegram Bot token.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8000
+    description: Local gateway server
+
+paths:
+  /send:
+    post:
+      summary: Send Message
+      description: Sends a message to a specific chat, optionally with custom parse modes, inline keyboards, silent delivery, and link preview configurations.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendRequest'
+      responses:
+        '200':
+          description: Message sent successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendResponse'
+        '400':
+          description: Invalid JSON or missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized (Invalid or missing Bearer token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit wait timeout exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Failed to deliver message via Telegram
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /health:
+    get:
+      summary: Health Check
+      description: Returns the health status of the gateway.
+      responses:
+        '200':
+          description: Gateway is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /metrics:
+    get:
+      summary: Prometheus Metrics
+      description: Scrape endpoint for Prometheus telemetry metrics.
+      responses:
+        '200':
+          description: Metrics payload in Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+webhooks:
+  StrategyCallbackWebhook:
+    post:
+      summary: Forward Callback to Strategy
+      description: |
+        Webhook payload forwarded from the gateway to the downstream strategy when
+        a user interacts with an inline keyboard button matching the strategy's route prefix.
+        
+        If `webhook_secret` is configured, the request includes a signature in the header:
+        `X-Gateway-Signature: <HMAC-SHA256-signature-hex-encoded>`
+      parameters:
+        - name: X-Gateway-Signature
+          in: header
+          description: Hex-encoded HMAC-SHA256 signature of the JSON body computed using the shared secret.
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CallbackPayload'
+      responses:
+        '200':
+          description: Webhook acknowledged. Optionally returns an answer query configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StrategyResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Provide the shared Gateway API Key configured via `gateway_api_key`.
+
+  schemas:
+    SendRequest:
+      type: object
+      required:
+        - text
+      properties:
+        chat_id:
+          type: integer
+          format: int64
+          description: Target chat ID. If omitted, defaults to the globally configured `telegram_chat_id`.
+          example: 123456789
+        text:
+          type: string
+          description: The message content to send.
+          example: "🚨 *ALERT*: New action detected!"
+        parse_mode:
+          type: string
+          description: Telegram parse mode for text formatting.
+          default: Markdown
+          enum:
+            - Markdown
+            - HTML
+            - MarkdownV2
+        disable_web_page_preview:
+          type: boolean
+          description: Disables link webpage preview bubbles.
+          default: false
+        disable_notification:
+          type: boolean
+          description: Delivers the message silently without sound or vibration.
+          default: false
+        reply_markup:
+          type: object
+          description: Telegram ReplyMarkup configuration (e.g. InlineKeyboardMarkup).
+          example:
+            inline_keyboard:
+              - - text: "🟢 Approve"
+                  callback_data: "strategy-a:approve:ev1"
+                - text: "🔴 Decline"
+                  callback_data: "strategy-a:decline:ev1"
+
+    SendResponse:
+      type: object
+      properties:
+        message_id:
+          type: integer
+          description: The ID of the successfully sent Telegram message.
+          example: 999
+        chat_id:
+          type: integer
+          format: int64
+          description: The ID of the target chat.
+          example: 123456789
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Description of the error.
+          example: "Unauthorized"
+
+    CallbackPayload:
+      type: object
+      properties:
+        callback_query_id:
+          type: string
+          description: Unique identifier for the callback query from Telegram.
+          example: "1234567890123456"
+        from_id:
+          type: integer
+          format: int64
+          description: Telegram user ID of the sender.
+          example: 987654321
+        username:
+          type: string
+          description: Telegram username of the sender.
+          example: "developer_user"
+        chat_id:
+          type: integer
+          format: int64
+          description: Chat ID where the inline keyboard message was posted.
+          example: 123456789
+        message_id:
+          type: integer
+          description: Message ID of the message containing the inline keyboard.
+          example: 999
+        data:
+          type: string
+          description: The raw callback data payload payload from the button clicked.
+          example: "strategy-a:approve:ev1"
+
+    StrategyResponse:
+      type: object
+      properties:
+        text:
+          type: string
+          description: Notification text to show to the user (toast or pop-up).
+          example: "Action Approved Successfully!"
+        show_alert:
+          type: boolean
+          description: If true, the user will see a popup alert modal. If false, it displays a brief top toast message.
+          default: false
