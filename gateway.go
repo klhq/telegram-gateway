@@ -17,6 +17,7 @@ import (
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
 )
 
@@ -409,4 +410,13 @@ func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"ok"}`))
+}
+
+// Routes returns the configured HTTP handler for all gateway endpoints
+func (gw *Gateway) Routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/send", gw.requireAuth(gw.HandleSend))
+	mux.HandleFunc("/health", gw.HandleHealth)
+	mux.Handle("/metrics", promhttp.Handler())
+	return mux
 }

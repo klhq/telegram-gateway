@@ -13,7 +13,6 @@ import (
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -86,19 +85,13 @@ func main() {
 		},
 	}
 
-	// Setup HTTP server
-	mux := http.NewServeMux()
-	mux.HandleFunc("/send", gw.requireAuth(gw.HandleSend))
-	mux.HandleFunc("/health", gw.HandleHealth)
-	mux.Handle("/metrics", promhttp.Handler())
-
 	if cfg.GatewayAPIKey == "" {
 		slog.Warn("GATEWAY_API_KEY is not set — /send endpoint is unauthenticated")
 	}
 
 	server := &http.Server{
 		Addr:         ":" + cfg.Port,
-		Handler:      mux,
+		Handler:      gw.Routes(),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  120 * time.Second,
