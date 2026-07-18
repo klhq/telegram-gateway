@@ -4,7 +4,11 @@
   "port": "8000",
   "gateway_api_key": "optional-shared-secret-key-for-auth",
   "routes": {
-    "combo": "http://localhost:8001/callback",
-    "book": "http://localhost:8002/callback"
+    "strategy-a": "http://localhost:8001/callback",
+    "strategy-b": "http://localhost:8002/callback"
+  },
+  "rate_limits": {
+    "global_per_second": 30,
+    "chat_per_second": 1
   }
 }

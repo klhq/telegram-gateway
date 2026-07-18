@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - CONFIG_PATH=/app/config.json
+    volumes:
+      - ./docker/config.json:/app/config.json:ro
+    depends_on:
+      - strategy-a
+      - strategy-b
+
+  strategy-a:
+    image: golang:1.26-alpine
+    volumes:
+      - .:/src
+    working_dir: /src
+    command: go run ./cmd/mock-strategy/main.go -port 8081
+    ports:
+      - "8081:8081"
+
+  strategy-b:
+    image: golang:1.26-alpine
+    volumes:
+      - .:/src
+    working_dir: /src
+    command: go run ./cmd/mock-strategy/main.go -port 8082
+    ports:
+      - "8082:8082"
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - gateway

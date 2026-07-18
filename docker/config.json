@@ -1,0 +1,14 @@
+{
+  "telegram_bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+  "telegram_chat_id": 0,
+  "port": "8000",
+  "gateway_api_key": "dev-secret-key",
+  "routes": {
+    "strategy-a": "http://strategy-a:8081/callback",
+    "strategy-b": "http://strategy-b:8082/callback"
+  },
+  "rate_limits": {
+    "global_per_second": 30,
+    "chat_per_second": 1
+  }
+}
