@@ -21,6 +21,7 @@ type Config struct {
 	Routes           map[string]string `json:"routes"`
 	RateLimits       RateLimits        `json:"rate_limits"`
 	WebhookSecret    string            `json:"webhook_secret"`
+	LogLevel         string            `json:"log_level"`
 }
 
 // LoadConfig loads the configuration from a JSON file path
@@ -58,6 +59,11 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.RateLimits.ChatPerSecond == 0 {
 		cfg.RateLimits.ChatPerSecond = 1.0
+	}
+
+	// Default log level
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = "INFO"
 	}
 
 	return &cfg, nil

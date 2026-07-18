@@ -71,6 +71,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.RateLimits.ChatPerSecond != 1.0 {
 		t.Errorf("expected default ChatPerSecond 1.0, got %f", cfg.RateLimits.ChatPerSecond)
 	}
+	if cfg.LogLevel != "INFO" {
+		t.Errorf("expected default LogLevel 'INFO', got '%s'", cfg.LogLevel)
+	}
 }
 
 func TestLoadConfigMissingToken(t *testing.T) {
