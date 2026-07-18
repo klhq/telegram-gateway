@@ -86,7 +86,11 @@ func main() {
 	}
 
 	if cfg.GatewayAPIKey == "" {
-		slog.Warn("GATEWAY_API_KEY is not set — /send endpoint is unauthenticated")
+		if os.Getenv("INSECURE_DEV_MODE") != "true" {
+			slog.Error("Security error: GATEWAY_API_KEY is not configured. To run unauthenticated for local development, set the environment variable INSECURE_DEV_MODE=true.")
+			os.Exit(1)
+		}
+		slog.Warn("WARNING: GATEWAY_API_KEY is not set — /send endpoint is running unauthenticated (INSECURE_DEV_MODE=true)")
 	}
 
 	server := &http.Server{
