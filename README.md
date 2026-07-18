@@ -7,8 +7,9 @@ A lightweight, high-performance, and generalized Telegram Gateway in Go. It acts
 Multiple processes cannot run `getUpdates` concurrently using the same bot token without conflicting. The Telegram Gateway solves this by:
 1. Long-polling `getUpdates` from Telegram as the sole receiver.
 2. Routing callback queries dynamically to the appropriate local backend services based on custom payload prefixes.
-3. Providing a unified `POST /send` endpoint for all strategies to send messages/alerts out to users.
-4. Exposing Prometheus metrics for full observability.
+3. Enforcing client-side rate limits (global and per-chat) to avoid hitting Telegram's limits.
+4. Securing callback forwards using HMAC-SHA256 signatures.
+5. Providing a unified `/send` endpoint for all strategies to dispatch alerts.
 
 ---
 
@@ -42,13 +43,17 @@ Configuration is loaded from a JSON file. By default, it looks for `config.json`
 
 ### Configuration Fields (`config.json`)
 
-| Field | Type | Description |
-|---|---|---|
-| `telegram_bot_token` | String | **Required.** Your Telegram Bot API token. |
-| `telegram_chat_id` | Integer | Optional default target chat ID. |
-| `port` | String | Port for the gateway server to listen on. Default: `8000`. |
-| `gateway_api_key` | String | Optional shared secret for token-based authentication on `POST /send`. |
-| `routes` | Map (String -> String) | Dynamic mapping of payload prefixes to target backend URLs. |
+| Field | Type | Description | Default |
+|---|---|---|---|
+| `telegram_bot_token` | String | **Required.** Your Telegram Bot API token. | N/A |
+| `telegram_chat_id` | Integer | Optional default target chat ID. | `0` |
+| `port` | String | Port for the gateway server to listen on. | `8000` |
+| `gateway_api_key` | String | Optional shared secret for token-based authentication on `POST /send`. | N/A |
+| `webhook_secret` | String | Optional shared secret key for signing forwarded callback webhooks (HMAC-SHA256). | N/A |
+| `log_level` | String | Log verbosity filter: `DEBUG`, `INFO`, `WARN`, `ERROR`. | `INFO` |
+| `routes` | Map | Dynamic mapping of payload prefixes to target backend URLs. | `{}` |
+| `rate_limits.global_per_second` | Float | Maximum messages allowed bot-wide per second. | `30.0` |
+| `rate_limits.chat_per_second` | Float | Maximum messages allowed per individual chat per second. | `1.0` |
 
 Example `config.json`:
 ```json
@@ -57,9 +62,15 @@ Example `config.json`:
   "telegram_chat_id": 123456789,
   "port": "8000",
   "gateway_api_key": "some-secure-key",
+  "webhook_secret": "my-signing-secret",
+  "log_level": "INFO",
   "routes": {
-    "combo": "http://localhost:8001/callback",
-    "book": "http://localhost:8002/callback"
+    "strategy-a": "http://localhost:8001/callback",
+    "strategy-b": "http://localhost:8002/callback"
+  },
+  "rate_limits": {
+    "global_per_second": 30.0,
+    "chat_per_second": 1.0
   }
 }
 ```
@@ -70,38 +81,40 @@ Example `config.json`:
 
 ### Prerequisites
 - Go 1.21+ (built and tested on Go 1.26)
+- Docker & Docker Compose (optional)
 
-### Installation
-Clone the repository and install the dependencies:
-```bash
-go mod download
-```
-
-### Running the Gateway
-1. Create a `config.json` file in the root directory (see example above).
+### Running Locally
+1. Copy the example configuration and fill in your Bot Token:
+   ```bash
+   cp config.json.example config.json
+   ```
 2. Start the gateway:
    ```bash
    go run .
    ```
-   Or explicitly pass a config path:
-   ```bash
-   go run . -config /path/to/config.json
-   ```
+   *Note: If no `gateway_api_key` is set, the gateway will fail to start by default unless the environment variable `INSECURE_DEV_MODE=true` is set.*
 
-### Running the Tests
-To run the unit/integration tests:
+### Running via Docker Compose
+To boot up a local developer stack featuring the gateway, two mock strategy services, and Prometheus:
 ```bash
-go test -v ./...
+docker compose up --build
 ```
+This is configured out-of-the-box using the parameters in [docker/config.json](file:///home/klhsu/workspace/projects/telegram-gateway/docker/config.json).
 
 ---
 
 ## API Endpoints
 
 ### 1. Send Message (`POST /send`)
-Allows strategies to send a message to a specific chat (optionally with an inline keyboard and markdown formatting).
+Allows downstream services to send a message to a specific chat. If `gateway_api_key` is configured, client requests must supply the key: `Authorization: Bearer <gateway_api_key>`.
 
-If `gateway_api_key` is set, calls must include the key in the authorization header: `Authorization: Bearer <gateway_api_key>`.
+#### Request Schema
+* `chat_id` (Integer): Target chat. Defaults to `telegram_chat_id` if omitted.
+* `text` (String): **Required.** Message content.
+* `parse_mode` (String): Formatting style: `Markdown`, `HTML`, `MarkdownV2`. Default: `Markdown`.
+* `disable_web_page_preview` (Boolean): Suppresses link webpage previews if `true`.
+* `disable_notification` (Boolean): Delivers the message silently (no sound/vibe) if `true`.
+* `reply_markup` (Object): InlineKeyboardMarkup definition.
 
 #### Request Example
 ```bash
@@ -110,19 +123,13 @@ curl -X POST http://localhost:8000/send \
   -H "Content-Type: application/json" \
   -d '{
     "chat_id": 123456789,
-    "text": "🚨 *COMB-ARB ALERT*: Spain vs. Cabo Verde...",
-    "reply_markup": {
-      "inline_keyboard": [
-        [
-          {"text": "🟢 Approve", "callback_data": "combo:approve:ev1"},
-          {"text": "🔴 Decline", "callback_data": "combo:decline:ev1"}
-        ]
-      ]
-    }
+    "text": "🚨 *ALERT*: Action detected! Link: https://example.com",
+    "disable_web_page_preview": true,
+    "disable_notification": true
   }'
 ```
 
-#### Response Example (Success)
+#### Response Example
 ```json
 {
   "message_id": 999,
@@ -132,45 +139,40 @@ curl -X POST http://localhost:8000/send \
 
 ---
 
-### 2. Inbound Callback Forwarding (Gateway -> Strategy)
-When the user clicks an inline button, the gateway forwards the callback query to the designated service based on the matched prefix (e.g. `combo:*` forwards to the URL configured for the `combo` prefix).
+### 2. Inbound Callback Forwarding (Gateway -> Downstream)
+When a user interacts with inline keyboard buttons, the gateway routes the callback query to the appropriate service based on prefix mapping.
 
-#### Forwarded Payload Format
-The gateway forwards a flattened JSON structure:
+#### Header Signature Validation
+If `webhook_secret` is set, the gateway signs the payload using HMAC-SHA256 and attaches the signature hex-string under:
+`X-Gateway-Signature: <hex_signature>`
+
+Downstream clients must compute the HMAC of the raw request body using the shared secret and perform constant-time comparison to verify payload authenticity and integrity.
+
+#### Forwarded Payload Shape
 ```json
 {
   "callback_query_id": "1234567890123456",
   "from_id": 987654321,
-  "username": "example_user",
+  "username": "developer_user",
   "chat_id": 123456789,
   "message_id": 999,
-  "data": "combo:approve:ev1"
-}
-```
-
-#### Strategy Response Expectations
-The strategy service should respond with `200 OK` and can optionally return a JSON payload to customize the Telegram callback answer:
-```json
-{
-  "text": "Approved successfully!",
-  "show_alert": false
+  "data": "strategy-a:approve:ev1"
 }
 ```
 
 ---
 
 ### 3. Prometheus Metrics (`GET /metrics`)
-Exposes standard Prometheus-compatible telemetry metrics for monitoring.
-* `telegram_gateway_incoming_updates_total`: Count of incoming Telegram updates (labeled by update type).
-* `telegram_gateway_callback_forward_total`: Total callbacks forwarded to strategy backends (labeled by prefix and status).
-* `telegram_gateway_callback_forward_duration_seconds`: Latency of callback query forwarding to backend strategies.
-* `telegram_gateway_send_requests_total`: Total POST `/send` requests (labeled by HTTP status code).
+Exposes telemetry indicators for scrapers (e.g. Prometheus):
+* `telegram_gateway_incoming_updates_total`: Incoming updates from Telegram.
+* `telegram_gateway_callback_forward_total`: Forwarded callback metrics.
+* `telegram_gateway_callback_forward_duration_seconds`: Hook latency histogram.
+* `telegram_gateway_send_requests_total`: Outbound dispatch request metrics.
 
 ---
 
 ### 4. Health Check (`GET /health`)
-Returns `200 OK` health status:
+Returns `200 OK`:
 ```json
 {"status":"ok"}
 ```
-
