@@ -62,6 +62,16 @@ func TestSendEndpointSuccess(t *testing.T) {
 			t.Errorf("expected reply_markup to not be empty")
 		}
 
+		disableWebPagePreview := r.FormValue("disable_web_page_preview")
+		if disableWebPagePreview != "true" {
+			t.Errorf("expected disable_web_page_preview 'true', got '%s'", disableWebPagePreview)
+		}
+
+		disableNotification := r.FormValue("disable_notification")
+		if disableNotification != "true" {
+			t.Errorf("expected disable_notification 'true', got '%s'", disableNotification)
+		}
+
 		// Mock success Telegram API response
 		resp := tgbotapi.APIResponse{
 			Ok: true,
@@ -116,7 +126,9 @@ func TestSendEndpointSuccess(t *testing.T) {
 				},
 			},
 		},
-		"parse_mode": "Markdown",
+		"parse_mode":                 "Markdown",
+		"disable_web_page_preview":   true,
+		"disable_notification":       true,
 	}
 	payloadBytes, _ := json.Marshal(payload)
 

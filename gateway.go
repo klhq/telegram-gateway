@@ -75,10 +75,12 @@ func (gw *Gateway) getChatLimiter(chatID int64) *rate.Limiter {
 
 // SendRequest represents the payload for POST /send
 type SendRequest struct {
-	ChatID      int64                          `json:"chat_id"`
-	Text        string                         `json:"text"`
-	ReplyMarkup *tgbotapi.InlineKeyboardMarkup `json:"reply_markup,omitempty"`
-	ParseMode   string                         `json:"parse_mode,omitempty"`
+	ChatID                int64                          `json:"chat_id"`
+	Text                  string                         `json:"text"`
+	ReplyMarkup           *tgbotapi.InlineKeyboardMarkup `json:"reply_markup,omitempty"`
+	ParseMode             string                         `json:"parse_mode,omitempty"`
+	DisableWebPagePreview bool                           `json:"disable_web_page_preview,omitempty"`
+	DisableNotification   bool                           `json:"disable_notification,omitempty"`
 }
 
 // SendResponse represents the response back to strategy client on successful send
@@ -183,6 +185,9 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	if req.ReplyMarkup != nil {
 		msg.ReplyMarkup = req.ReplyMarkup
 	}
+
+	msg.DisableWebPagePreview = req.DisableWebPagePreview
+	msg.DisableNotification = req.DisableNotification
 
 	sentMsg, err := gw.Bot.Send(msg)
 	if err != nil {
