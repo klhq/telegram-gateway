@@ -567,6 +567,72 @@ func TestCallbackQueryRoutingDown(t *testing.T) {
 	}
 }
 
+func TestCallbackQueryRoutingUnauthorizedChat(t *testing.T) {
+	telegramAnswered := false
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/botmock-token/getMe" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+			return
+		}
+		if r.URL.Path == "/botmock-token/answerCallbackQuery" {
+			telegramAnswered = true
+			if r.FormValue("text") != "Unauthorized chat source" {
+				t.Errorf("expected 'Unauthorized chat source', got '%s'", r.FormValue("text"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":true}`))
+			return
+		}
+	}))
+	defer telegramServer.Close()
+
+	botURL := telegramServer.URL + "/bot%s/%s"
+	bot, err := tgbotapi.NewBotAPIWithClient("mock-token", botURL, http.DefaultClient)
+	if err != nil {
+		t.Fatalf("failed to create BotAPI: %v", err)
+	}
+
+	cfg := &Config{
+		TelegramBotToken: "mock-token",
+		TelegramChatID:   11111, // Configured expected chat ID
+		Port:             "8000",
+		Routes: map[string]string{
+			"receiver-a": "http://localhost:12345/callback",
+		},
+	}
+	gw := &Gateway{
+		Bot:    bot,
+		Config: cfg,
+		Client: http.DefaultClient,
+	}
+
+	update := tgbotapi.Update{
+		UpdateID: 1,
+		CallbackQuery: &tgbotapi.CallbackQuery{
+			ID:   "cb-unauth-chat",
+			Data: "receiver-a:approve:ev1",
+			From: &tgbotapi.User{
+				ID: 555,
+			},
+			Message: &tgbotapi.Message{
+				MessageID: 777,
+				Chat: &tgbotapi.Chat{
+					ID: 99999, // Mismatched chat ID (not 11111)
+				},
+			},
+		},
+	}
+
+	gw.HandleUpdate(update)
+
+	if !telegramAnswered {
+		t.Error("expected answerCallbackQuery to be called")
+	}
+}
+
 func TestHealthEndpoint(t *testing.T) {
 	gw := &Gateway{}
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)

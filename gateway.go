@@ -283,6 +283,27 @@ func (gw *Gateway) HandleUpdate(update tgbotapi.Update) {
 	}
 
 	cb := update.CallbackQuery
+
+	// If telegram_chat_id is configured (non-zero), enforce that the callback query
+	// originates from this chat to prevent unauthorized group/private chat callback triggers.
+	if gw.Config.TelegramChatID != 0 {
+		if cb.Message == nil || cb.Message.Chat.ID != gw.Config.TelegramChatID {
+			slog.Warn("Rejected callback query: originating chat ID does not match configured telegram_chat_id",
+				"expected", gw.Config.TelegramChatID,
+				"received", func() int64 {
+					if cb.Message != nil {
+						return cb.Message.Chat.ID
+					}
+					return 0
+				}(),
+				"callback_id", cb.ID,
+			)
+			gw.answerCallback(cb.ID, "Unauthorized chat source", true)
+			metricCallbackForward.WithLabelValues("unauthorized", "unauthorized_chat").Inc()
+			return
+		}
+	}
+
 	data := cb.Data
 
 	var targetURL string
