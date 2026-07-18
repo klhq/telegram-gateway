@@ -48,8 +48,8 @@ func TestSendEndpointSuccess(t *testing.T) {
 		}
 
 		text := r.FormValue("text")
-		if text != "🚨 COMB-ARB ALERT" {
-			t.Errorf("expected text '🚨 COMB-ARB ALERT', got '%s'", text)
+		if text != "🚨 ALERT" {
+			t.Errorf("expected text '🚨 ALERT', got '%s'", text)
 		}
 
 		parseMode := r.FormValue("parse_mode")
@@ -82,7 +82,7 @@ func TestSendEndpointSuccess(t *testing.T) {
 					"type": "private"
 				},
 				"date": 1600000000,
-				"text": "🚨 COMB-ARB ALERT"
+				"text": "🚨 ALERT"
 			}`),
 		}
 		respBytes, _ := json.Marshal(resp)
@@ -115,20 +115,20 @@ func TestSendEndpointSuccess(t *testing.T) {
 	// 4. Create request payload for /send
 	payload := map[string]interface{}{
 		"chat_id": 123456789,
-		"text":    "🚨 COMB-ARB ALERT",
+		"text":    "🚨 ALERT",
 		"reply_markup": map[string]interface{}{
 			"inline_keyboard": []interface{}{
 				[]interface{}{
 					map[string]interface{}{
 						"text":          "🟢 Approve",
-						"callback_data": "combo:approve:ev1",
+						"callback_data": "receiver-a:approve:ev1",
 					},
 				},
 			},
 		},
-		"parse_mode":                 "Markdown",
-		"disable_web_page_preview":   true,
-		"disable_notification":       true,
+		"parse_mode":               "Markdown",
+		"disable_web_page_preview": true,
+		"disable_notification":     true,
 	}
 	payloadBytes, _ := json.Marshal(payload)
 
@@ -222,11 +222,11 @@ func TestSendEndpointTelegramError(t *testing.T) {
 	}
 }
 
-func TestCallbackQueryRoutingComboSuccess(t *testing.T) {
-	// 1. Start a mock strategy server for COMB_ARB
-	strategyCalled := false
-	strategyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		strategyCalled = true
+func TestCallbackQueryRoutingReceiverASuccess(t *testing.T) {
+	// 1. Start a mock receiver server for receiver-a
+	receiverCalled := false
+	receiverServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receiverCalled = true
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
@@ -240,8 +240,8 @@ func TestCallbackQueryRoutingComboSuccess(t *testing.T) {
 			t.Errorf("failed to decode callback payload: %v", err)
 		}
 
-		if payload.Data != "combo:approve:ev1" {
-			t.Errorf("expected data 'combo:approve:ev1', got '%s'", payload.Data)
+		if payload.Data != "receiver-a:approve:ev1" {
+			t.Errorf("expected data 'receiver-a:approve:ev1', got '%s'", payload.Data)
 		}
 		if payload.CallbackQueryID != "cb-123" {
 			t.Errorf("expected callback_query_id 'cb-123', got '%s'", payload.CallbackQueryID)
@@ -249,9 +249,9 @@ func TestCallbackQueryRoutingComboSuccess(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"text":"Combo Approved!","show_alert":true}`))
+		w.Write([]byte(`{"text":"Receiver A Approved!","show_alert":true}`))
 	}))
-	defer strategyServer.Close()
+	defer receiverServer.Close()
 
 	// 2. Start mock Telegram server
 	telegramAnswered := false
@@ -272,8 +272,8 @@ func TestCallbackQueryRoutingComboSuccess(t *testing.T) {
 			if r.FormValue("callback_query_id") != "cb-123" {
 				t.Errorf("expected callback_query_id 'cb-123', got '%s'", r.FormValue("callback_query_id"))
 			}
-			if r.FormValue("text") != "Combo Approved!" {
-				t.Errorf("expected text 'Combo Approved!', got '%s'", r.FormValue("text"))
+			if r.FormValue("text") != "Receiver A Approved!" {
+				t.Errorf("expected text 'Receiver A Approved!', got '%s'", r.FormValue("text"))
 			}
 			if r.FormValue("show_alert") != "true" {
 				t.Errorf("expected show_alert 'true', got '%s'", r.FormValue("show_alert"))
@@ -297,8 +297,8 @@ func TestCallbackQueryRoutingComboSuccess(t *testing.T) {
 		TelegramBotToken: "mock-token",
 		Port:             "8000",
 		Routes: map[string]string{
-			"combo": strategyServer.URL + "/callback",
-			"book":  "http://localhost:9999/callback",
+			"receiver-a": receiverServer.URL + "/callback",
+			"receiver-b": "http://localhost:9999/callback",
 		},
 	}
 	gw := &Gateway{
@@ -312,7 +312,7 @@ func TestCallbackQueryRoutingComboSuccess(t *testing.T) {
 		UpdateID: 1,
 		CallbackQuery: &tgbotapi.CallbackQuery{
 			ID:   "cb-123",
-			Data: "combo:approve:ev1",
+			Data: "receiver-a:approve:ev1",
 			From: &tgbotapi.User{
 				ID:       555,
 				UserName: "user555",
@@ -328,8 +328,8 @@ func TestCallbackQueryRoutingComboSuccess(t *testing.T) {
 
 	gw.HandleUpdate(update)
 
-	if !strategyCalled {
-		t.Error("expected strategy callback to be called")
+	if !receiverCalled {
+		t.Error("expected receiver callback to be called")
 	}
 	if !telegramAnswered {
 		t.Error("expected answerCallbackQuery to be called")
@@ -337,8 +337,8 @@ func TestCallbackQueryRoutingComboSuccess(t *testing.T) {
 }
 
 func TestCallbackQueryRoutingTimeout(t *testing.T) {
-	// 1. Mock a slow strategy server
-	strategyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 1. Mock a slow receiver server
+	receiverServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Sleep for 6 seconds to trigger the 5-second gateway timeout
 		select {
 		case <-r.Context().Done():
@@ -347,7 +347,7 @@ func TestCallbackQueryRoutingTimeout(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		}
 	}))
-	defer strategyServer.Close()
+	defer receiverServer.Close()
 
 	// 2. Start mock Telegram server
 	telegramAnswered := false
@@ -365,7 +365,7 @@ func TestCallbackQueryRoutingTimeout(t *testing.T) {
 			if err != nil {
 				t.Errorf("failed to parse form: %v", err)
 			}
-			if r.FormValue("text") != "Strategy backend unreachable" {
+			if r.FormValue("text") != "Receiver backend unreachable" {
 				t.Errorf("expected warning text, got '%s'", r.FormValue("text"))
 			}
 
@@ -387,7 +387,7 @@ func TestCallbackQueryRoutingTimeout(t *testing.T) {
 		TelegramBotToken: "mock-token",
 		Port:             "8000",
 		Routes: map[string]string{
-			"combo": strategyServer.URL + "/callback",
+			"receiver-a": receiverServer.URL + "/callback",
 		},
 	}
 	gw := &Gateway{
@@ -400,7 +400,7 @@ func TestCallbackQueryRoutingTimeout(t *testing.T) {
 		UpdateID: 1,
 		CallbackQuery: &tgbotapi.CallbackQuery{
 			ID:   "cb-timeout",
-			Data: "combo:slow",
+			Data: "receiver-a:slow",
 			From: &tgbotapi.User{
 				ID: 555,
 			},
@@ -420,20 +420,20 @@ func TestCallbackQueryRoutingTimeout(t *testing.T) {
 	}
 }
 
-func TestCallbackQueryRoutingBookSuccess(t *testing.T) {
-	strategyCalled := false
-	strategyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		strategyCalled = true
+func TestCallbackQueryRoutingReceiverBSuccess(t *testing.T) {
+	receiverCalled := false
+	receiverServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receiverCalled = true
 		var payload CallbackPayload
 		_ = json.NewDecoder(r.Body).Decode(&payload)
-		if payload.Data != "book:decline:ev2" {
-			t.Errorf("expected data 'book:decline:ev2', got '%s'", payload.Data)
+		if payload.Data != "receiver-b:decline:ev2" {
+			t.Errorf("expected data 'receiver-b:decline:ev2', got '%s'", payload.Data)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"text":"Book Declined!","show_alert":false}`))
+		w.Write([]byte(`{"text":"Receiver B Declined!","show_alert":false}`))
 	}))
-	defer strategyServer.Close()
+	defer receiverServer.Close()
 
 	telegramAnswered := false
 	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -445,8 +445,8 @@ func TestCallbackQueryRoutingBookSuccess(t *testing.T) {
 		}
 		if r.URL.Path == "/botmock-token/answerCallbackQuery" {
 			telegramAnswered = true
-			if r.FormValue("text") != "Book Declined!" {
-				t.Errorf("expected 'Book Declined!', got '%s'", r.FormValue("text"))
+			if r.FormValue("text") != "Receiver B Declined!" {
+				t.Errorf("expected 'Receiver B Declined!', got '%s'", r.FormValue("text"))
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -466,7 +466,7 @@ func TestCallbackQueryRoutingBookSuccess(t *testing.T) {
 		TelegramBotToken: "mock-token",
 		Port:             "8000",
 		Routes: map[string]string{
-			"book": strategyServer.URL + "/callback",
+			"receiver-b": receiverServer.URL + "/callback",
 		},
 	}
 	gw := &Gateway{
@@ -479,7 +479,7 @@ func TestCallbackQueryRoutingBookSuccess(t *testing.T) {
 		UpdateID: 1,
 		CallbackQuery: &tgbotapi.CallbackQuery{
 			ID:   "cb-book-123",
-			Data: "book:decline:ev2",
+			Data: "receiver-b:decline:ev2",
 			From: &tgbotapi.User{
 				ID: 555,
 			},
@@ -494,8 +494,8 @@ func TestCallbackQueryRoutingBookSuccess(t *testing.T) {
 
 	gw.HandleUpdate(update)
 
-	if !strategyCalled {
-		t.Error("expected strategy callback to be called")
+	if !receiverCalled {
+		t.Error("expected receiver callback to be called")
 	}
 	if !telegramAnswered {
 		t.Error("expected answerCallbackQuery to be called")
@@ -513,7 +513,7 @@ func TestCallbackQueryRoutingDown(t *testing.T) {
 		}
 		if r.URL.Path == "/botmock-token/answerCallbackQuery" {
 			telegramAnswered = true
-			if r.FormValue("text") != "Strategy backend unreachable" {
+			if r.FormValue("text") != "Receiver backend unreachable" {
 				t.Errorf("expected warning, got '%s'", r.FormValue("text"))
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -534,7 +534,7 @@ func TestCallbackQueryRoutingDown(t *testing.T) {
 		TelegramBotToken: "mock-token",
 		Port:             "8000",
 		Routes: map[string]string{
-			"combo": "http://localhost:12345/nonexistent-callback",
+			"receiver-a": "http://localhost:12345/nonexistent-callback",
 		},
 	}
 	gw := &Gateway{
@@ -547,7 +547,7 @@ func TestCallbackQueryRoutingDown(t *testing.T) {
 		UpdateID: 1,
 		CallbackQuery: &tgbotapi.CallbackQuery{
 			ID:   "cb-down-123",
-			Data: "combo:approve:ev1",
+			Data: "receiver-a:approve:ev1",
 			From: &tgbotapi.User{
 				ID: 555,
 			},
@@ -663,7 +663,7 @@ func TestCallbackQuerySigning(t *testing.T) {
 	var signatureReceived string
 	var bodyReceived []byte
 
-	strategyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	receiverServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		signatureReceived = r.Header.Get("X-Gateway-Signature")
 		var err error
 		bodyReceived, err = io.ReadAll(r.Body)
@@ -672,7 +672,7 @@ func TestCallbackQuerySigning(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer strategyServer.Close()
+	defer receiverServer.Close()
 
 	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/botmock-token/getMe" {
@@ -701,7 +701,7 @@ func TestCallbackQuerySigning(t *testing.T) {
 		Port:             "8000",
 		WebhookSecret:    secret,
 		Routes: map[string]string{
-			"combo": strategyServer.URL + "/callback",
+			"receiver-a": receiverServer.URL + "/callback",
 		},
 	}
 	gw := &Gateway{
@@ -714,7 +714,7 @@ func TestCallbackQuerySigning(t *testing.T) {
 		UpdateID: 1,
 		CallbackQuery: &tgbotapi.CallbackQuery{
 			ID:   "cb-signing",
-			Data: "combo:action",
+			Data: "receiver-a:action",
 			From: &tgbotapi.User{
 				ID: 555,
 			},

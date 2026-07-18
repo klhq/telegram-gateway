@@ -12,24 +12,24 @@ services:
     volumes:
       - ./docker/config.json:/app/config.json:ro
     depends_on:
-      - strategy-a
-      - strategy-b
+      - receiver-a
+      - receiver-b
 
-  strategy-a:
+  receiver-a:
     image: golang:1.26-alpine
     volumes:
       - .:/src
     working_dir: /src
-    command: go run ./cmd/mock-strategy/main.go -port 8081 -secret dev-webhook-secret
+    command: go run ./cmd/mock-receiver/main.go -port 8081 -secret dev-webhook-secret
     ports:
       - "8081:8081"
 
-  strategy-b:
+  receiver-b:
     image: golang:1.26-alpine
     volumes:
       - .:/src
     working_dir: /src
-    command: go run ./cmd/mock-strategy/main.go -port 8082 -secret dev-webhook-secret
+    command: go run ./cmd/mock-receiver/main.go -port 8082 -secret dev-webhook-secret
     ports:
       - "8082:8082"
 

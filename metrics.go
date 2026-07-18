@@ -17,7 +17,7 @@ var (
 	metricCallbackForward = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "telegram_gateway_callback_forward_total",
-			Help: "The total number of callbacks forwarded to strategy backends.",
+			Help: "The total number of callbacks forwarded to receiver backends.",
 		},
 		[]string{"prefix", "status"},
 	)

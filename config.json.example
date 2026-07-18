@@ -6,8 +6,8 @@
   "webhook_secret": "optional-shared-webhook-signing-secret",
   "log_level": "INFO",
   "routes": {
-    "strategy-a": "http://localhost:8001/callback",
-    "strategy-b": "http://localhost:8002/callback"
+    "receiver-a": "http://localhost:8001/callback",
+    "receiver-b": "http://localhost:8002/callback"
   },
   "rate_limits": {
     "global_per_second": 30,

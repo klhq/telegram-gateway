@@ -65,8 +65,8 @@ Example `config.json`:
   "webhook_secret": "my-signing-secret",
   "log_level": "INFO",
   "routes": {
-    "strategy-a": "http://localhost:8001/callback",
-    "strategy-b": "http://localhost:8002/callback"
+    "receiver-a": "http://localhost:8001/callback",
+    "receiver-b": "http://localhost:8002/callback"
   },
   "rate_limits": {
     "global_per_second": 30.0,
@@ -95,7 +95,7 @@ Example `config.json`:
    *Note: If no `gateway_api_key` is set, the gateway will fail to start by default unless the environment variable `INSECURE_DEV_MODE=true` is set.*
 
 ### Running via Docker Compose
-To boot up a local developer stack featuring the gateway, two mock strategy services, and Prometheus:
+To boot up a local developer stack featuring the gateway, two mock receiver services, and Prometheus:
 ```bash
 docker compose up --build
 ```
@@ -156,7 +156,7 @@ Downstream clients must compute the HMAC of the raw request body using the share
   "username": "developer_user",
   "chat_id": 123456789,
   "message_id": 999,
-  "data": "strategy-a:approve:ev1"
+  "data": "receiver-a:approve:ev1"
 }
 ```
 

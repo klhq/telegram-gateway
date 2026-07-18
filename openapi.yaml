@@ -84,12 +84,12 @@ paths:
                 type: string
 
 webhooks:
-  StrategyCallbackWebhook:
+  CallbackWebhook:
     post:
-      summary: Forward Callback to Strategy
+      summary: Forward Callback to Receiver
       description: |
-        Webhook payload forwarded from the gateway to the downstream strategy when
-        a user interacts with an inline keyboard button matching the strategy's route prefix.
+        Webhook payload forwarded from the gateway to the downstream receiver when
+        a user interacts with an inline keyboard button matching the receiver's route prefix.
         
         If `webhook_secret` is configured, the request includes a signature in the header:
         `X-Gateway-Signature: <HMAC-SHA256-signature-hex-encoded>`
@@ -112,7 +112,7 @@ webhooks:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StrategyResponse'
+                $ref: '#/components/schemas/ReceiverResponse'
 
 components:
   securitySchemes:
@@ -158,9 +158,9 @@ components:
           example:
             inline_keyboard:
               - - text: "🟢 Approve"
-                  callback_data: "strategy-a:approve:ev1"
+                  callback_data: "receiver-a:approve:ev1"
                 - text: "🔴 Decline"
-                  callback_data: "strategy-a:decline:ev1"
+                  callback_data: "receiver-a:decline:ev1"
 
     SendResponse:
       type: object
@@ -210,10 +210,10 @@ components:
           example: 999
         data:
           type: string
-          description: The raw callback data payload payload from the button clicked.
-          example: "strategy-a:approve:ev1"
+          description: The raw callback data payload from the button clicked.
+          example: "receiver-a:approve:ev1"
 
-    StrategyResponse:
+    ReceiverResponse:
       type: object
       properties:
         text:

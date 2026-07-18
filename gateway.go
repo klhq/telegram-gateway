@@ -84,7 +84,7 @@ type SendRequest struct {
 	DisableNotification   bool                           `json:"disable_notification,omitempty"`
 }
 
-// SendResponse represents the response back to strategy client on successful send
+// SendResponse represents the response back to the client on successful send
 type SendResponse struct {
 	MessageID int   `json:"message_id"`
 	ChatID    int64 `json:"chat_id"`
@@ -95,7 +95,7 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// CallbackPayload represents the simplified JSON payload forwarded to the strategy service
+// CallbackPayload represents the simplified JSON payload forwarded to the downstream receiver service
 type CallbackPayload struct {
 	CallbackQueryID string `json:"callback_query_id"`
 	FromID          int64  `json:"from_id"`
@@ -105,8 +105,8 @@ type CallbackPayload struct {
 	Data            string `json:"data"`
 }
 
-// StrategyResponse represents the optional JSON response from the strategy service
-type StrategyResponse struct {
+// ReceiverResponse represents the optional JSON response from the receiver service
+type ReceiverResponse struct {
 	Text      string `json:"text,omitempty"`
 	ShowAlert bool   `json:"show_alert,omitempty"`
 }
@@ -259,7 +259,7 @@ func (gw *Gateway) StartUpdateLoop(ctx context.Context) {
 				}
 
 				// Dispatch each update in its own goroutine so a slow or hanging
-				// strategy backend cannot stall the polling loop.
+				// downstream backend cannot stall the polling loop.
 				update := update // capture loop variable
 				gw.WG.Add(1)
 				go func(up tgbotapi.Update) {
@@ -318,16 +318,16 @@ func (gw *Gateway) HandleUpdate(update tgbotapi.Update) {
 		payload.MessageID = cb.Message.MessageID
 	}
 
-	// Forward payload to the strategy backend via POST with 5s timeout
-	err := gw.forwardCallbackToStrategy(matchedPrefix, targetURL, payload)
+	// Forward payload to the receiver backend via POST with 5s timeout
+	err := gw.forwardCallbackToReceiver(matchedPrefix, targetURL, payload)
 	if err != nil {
-		slog.Error("Error forwarding callback to strategy", "prefix", matchedPrefix, "target_url", targetURL, "error", err)
-		gw.answerCallback(cb.ID, "Strategy backend unreachable", true)
+		slog.Error("Error forwarding callback to receiver", "prefix", matchedPrefix, "target_url", targetURL, "error", err)
+		gw.answerCallback(cb.ID, "Receiver backend unreachable", true)
 	}
 }
 
-// forwardCallbackToStrategy POSTs payload to strategy and answers the Telegram callback query accordingly
-func (gw *Gateway) forwardCallbackToStrategy(prefix string, targetURL string, payload CallbackPayload) error {
+// forwardCallbackToReceiver POSTs payload to receiver and answers the Telegram callback query accordingly
+func (gw *Gateway) forwardCallbackToReceiver(prefix string, targetURL string, payload CallbackPayload) error {
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
 		metricCallbackForward.WithLabelValues(prefix, "marshal_error").Inc()
@@ -365,20 +365,20 @@ func (gw *Gateway) forwardCallbackToStrategy(prefix string, targetURL string, pa
 
 	if resp.StatusCode != http.StatusOK {
 		metricCallbackForward.WithLabelValues(prefix, "status_"+strconv.Itoa(resp.StatusCode)).Inc()
-		return fmt.Errorf("strategy returned status code %d", resp.StatusCode)
+		return fmt.Errorf("receiver returned status code %d", resp.StatusCode)
 	}
 
 	// Read optional response JSON
-	var stratResp StrategyResponse
+	var rxResp ReceiverResponse
 	dec := json.NewDecoder(resp.Body)
-	if err := dec.Decode(&stratResp); err != nil {
+	if err := dec.Decode(&rxResp); err != nil {
 		// Response is empty or not JSON, which is acceptable. Acknowledge with empty string.
 		gw.answerCallback(payload.CallbackQueryID, "", false)
 		metricCallbackForward.WithLabelValues(prefix, "success_empty").Inc()
 		return nil
 	}
 
-	gw.answerCallback(payload.CallbackQueryID, stratResp.Text, stratResp.ShowAlert)
+	gw.answerCallback(payload.CallbackQueryID, rxResp.Text, rxResp.ShowAlert)
 	metricCallbackForward.WithLabelValues(prefix, "success_response").Inc()
 	return nil
 }

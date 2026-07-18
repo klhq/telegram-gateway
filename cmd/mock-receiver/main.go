@@ -21,7 +21,7 @@ type CallbackPayload struct {
 	Data            string `json:"data"`
 }
 
-type StrategyResponse struct {
+type ReceiverResponse struct {
 	Text      string `json:"text,omitempty"`
 	ShowAlert bool   `json:"show_alert,omitempty"`
 }
@@ -86,7 +86,7 @@ func main() {
 			"verified", *secret != "",
 		)
 
-		resp := StrategyResponse{
+		resp := ReceiverResponse{
 			Text:      "Mock Response: Action Executed!",
 			ShowAlert: false,
 		}
@@ -96,9 +96,9 @@ func main() {
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	slog.Info("Starting Mock Strategy Server", "port", *port, "signing_validation_enabled", *secret != "")
+	slog.Info("Starting Mock Receiver Server", "port", *port, "signing_validation_enabled", *secret != "")
 	if err := http.ListenAndServe(":"+*port, nil); err != nil {
-		slog.Error("Mock Strategy Server error", "error", err)
+		slog.Error("Mock Receiver Server error", "error", err)
 		os.Exit(1)
 	}
 }
