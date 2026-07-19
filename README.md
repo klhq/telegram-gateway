@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/tg-gateway.png" alt="Telegram Gateway Logo" width="160" height="160" />
+</p>
+
 # Telegram Gateway
 
 A lightweight, high-performance, and generalized Telegram Gateway in Go. It acts as a single inbound and outbound messaging hub for multiple independent downstream service daemons sharing a single Telegram Bot token.
