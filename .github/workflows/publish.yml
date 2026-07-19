@@ -77,3 +77,17 @@ jobs:
           push: true
           tags: ${{ id.meta.outputs.tags || steps.meta.outputs.tags }}
           labels: ${{ id.meta.outputs.labels || steps.meta.outputs.labels }}
+
+  release:
+    name: Create GitHub Release
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create release from version tag
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
