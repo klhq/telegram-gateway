@@ -7,7 +7,31 @@ import (
 	"testing"
 )
 
+func clearConfigEnvironment(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{
+		"TELEGRAM_BOT_TOKEN",
+		"TELEGRAM_BOT_TOKEN_FILE",
+		"TELEGRAM_CHAT_ID",
+		"PORT",
+		"GATEWAY_API_KEY",
+		"GATEWAY_API_KEY_FILE",
+		"WEBHOOK_SECRET",
+		"WEBHOOK_SECRET_FILE",
+		"LOG_LEVEL",
+		"GLOBAL_RATE_LIMIT",
+		"CHAT_RATE_LIMIT",
+		"COMB_ARB_URL",
+		"BOOK_ARB_URL",
+		"ROUTES_JSON",
+		"ROUTES_FILE",
+	} {
+		t.Setenv(name, "")
+	}
+}
+
 func TestLoadConfig(t *testing.T) {
+	clearConfigEnvironment(t)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.json")
 
@@ -44,6 +68,7 @@ func TestLoadConfig(t *testing.T) {
 }
 
 func TestLoadConfigDefaults(t *testing.T) {
+	clearConfigEnvironment(t)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.json")
 
@@ -78,6 +103,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 }
 
 func TestLoadConfigMissingToken(t *testing.T) {
+	clearConfigEnvironment(t)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.json")
 
@@ -96,6 +122,7 @@ func TestLoadConfigMissingToken(t *testing.T) {
 }
 
 func TestLoadConfigFileNotFound(t *testing.T) {
+	clearConfigEnvironment(t)
 	_, err := LoadConfig("nonexistent_config.json")
 	if err == nil {
 		t.Error("expected error when config file does not exist")
@@ -103,6 +130,7 @@ func TestLoadConfigFileNotFound(t *testing.T) {
 }
 
 func TestLoadConfigTelegramBotTokenFileOverridesOtherSources(t *testing.T) {
+	clearConfigEnvironment(t)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.json")
 	secretPath := filepath.Join(tempDir, "telegram_bot_token")
@@ -126,6 +154,7 @@ func TestLoadConfigTelegramBotTokenFileOverridesOtherSources(t *testing.T) {
 }
 
 func TestLoadConfigOptionalSecretFilesOverrideOtherSources(t *testing.T) {
+	clearConfigEnvironment(t)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.json")
 	apiKeyPath := filepath.Join(tempDir, "gateway_api_key")
@@ -156,6 +185,7 @@ func TestLoadConfigOptionalSecretFilesOverrideOtherSources(t *testing.T) {
 }
 
 func TestLoadConfigEnvironmentOverridesJSON(t *testing.T) {
+	clearConfigEnvironment(t)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.json")
 	content := `{
@@ -196,6 +226,7 @@ func TestLoadConfigEnvironmentOverridesJSON(t *testing.T) {
 }
 
 func TestLoadConfigRoutesJSONOverridesJSONConfig(t *testing.T) {
+	clearConfigEnvironment(t)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.json")
 	content := `{"telegram_bot_token":"token","routes":{"old":"http://old:8080/callback"}}`
@@ -214,6 +245,7 @@ func TestLoadConfigRoutesJSONOverridesJSONConfig(t *testing.T) {
 }
 
 func TestLoadConfigRoutesFileOverridesJSONConfig(t *testing.T) {
+	clearConfigEnvironment(t)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.json")
 	routesPath := filepath.Join(tempDir, "routes.json")
@@ -235,6 +267,7 @@ func TestLoadConfigRoutesFileOverridesJSONConfig(t *testing.T) {
 }
 
 func TestLoadConfigRejectsConflictingRouteSources(t *testing.T) {
+	clearConfigEnvironment(t)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.json")
 	if err := os.WriteFile(configPath, []byte(`{"telegram_bot_token":"token"}`), 0600); err != nil {
@@ -250,6 +283,7 @@ func TestLoadConfigRejectsConflictingRouteSources(t *testing.T) {
 }
 
 func TestLoadConfigPreservesLegacyEnvironmentRoutes(t *testing.T) {
+	clearConfigEnvironment(t)
 	t.Setenv("TELEGRAM_BOT_TOKEN", "token")
 	t.Setenv("COMB_ARB_URL", "http://combo:8080/callback")
 	t.Setenv("BOOK_ARB_URL", "http://book:8080/callback")
@@ -264,6 +298,7 @@ func TestLoadConfigPreservesLegacyEnvironmentRoutes(t *testing.T) {
 }
 
 func TestLoadConfigRejectsEmptySecretFileWithSourceName(t *testing.T) {
+	clearConfigEnvironment(t)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.json")
 	secretPath := filepath.Join(tempDir, "telegram_bot_token")
@@ -282,6 +317,7 @@ func TestLoadConfigRejectsEmptySecretFileWithSourceName(t *testing.T) {
 }
 
 func TestLoadConfigRejectsNonObjectRouteSources(t *testing.T) {
+	clearConfigEnvironment(t)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.json")
 	if err := os.WriteFile(configPath, []byte(`{"telegram_bot_token":"token"}`), 0600); err != nil {
