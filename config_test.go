@@ -330,3 +330,62 @@ func TestLoadConfigRejectsNonObjectRouteSources(t *testing.T) {
 		t.Fatalf("expected route object error, got %v", err)
 	}
 }
+
+func TestLoadConfigReportsInvalidExternalSources(t *testing.T) {
+	tests := []struct {
+		name       string
+		envName    string
+		envValue   func(string) string
+		writeValue string
+		wantError  string
+	}{
+		{
+			name:      "unreadable secret file",
+			envName:   "TELEGRAM_BOT_TOKEN_FILE",
+			envValue:  func(tempDir string) string { return filepath.Join(tempDir, "missing-secret") },
+			wantError: "failed to read TELEGRAM_BOT_TOKEN_FILE",
+		},
+		{
+			name:      "malformed routes JSON",
+			envName:   "ROUTES_JSON",
+			envValue:  func(string) string { return "{" },
+			wantError: "failed to parse ROUTES_JSON",
+		},
+		{
+			name:      "unreadable routes file",
+			envName:   "ROUTES_FILE",
+			envValue:  func(tempDir string) string { return filepath.Join(tempDir, "missing-routes.json") },
+			wantError: "failed to read ROUTES_FILE",
+		},
+		{
+			name:       "malformed routes file",
+			envName:    "ROUTES_FILE",
+			envValue:   func(tempDir string) string { return filepath.Join(tempDir, "routes.json") },
+			writeValue: "{",
+			wantError:  "failed to parse ROUTES_FILE",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigEnvironment(t)
+			tempDir := t.TempDir()
+			configPath := filepath.Join(tempDir, "config.json")
+			if err := os.WriteFile(configPath, []byte(`{"telegram_bot_token":"token"}`), 0600); err != nil {
+				t.Fatalf("failed to write config test file: %v", err)
+			}
+			sourceValue := test.envValue(tempDir)
+			if test.writeValue != "" {
+				if err := os.WriteFile(sourceValue, []byte(test.writeValue), 0600); err != nil {
+					t.Fatalf("failed to write external source: %v", err)
+				}
+			}
+			t.Setenv(test.envName, sourceValue)
+
+			_, err := LoadConfig(configPath)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("expected error containing %q, got %v", test.wantError, err)
+			}
+		})
+	}
+}
