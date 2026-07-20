@@ -31,3 +31,6 @@ telegram-gateway
 
 # Local configuration
 config.json
+
+# Internal SDD working artifacts
+docs/sdd/
