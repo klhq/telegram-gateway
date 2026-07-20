@@ -45,7 +45,7 @@ Multiple processes cannot run `getUpdates` concurrently using the same bot token
 
 The gateway reads `config.json` from its working directory. Set `CONFIG_PATH` or pass `-config` to use another path. The public contract lives in [`config.schema.json`](config.schema.json).
 
-Container deployments should keep routes and rate limits in `config.json`, then supply secrets through Docker secrets and the `*_FILE` variables.
+Container deployments keep routes and rate limits in `config.json`. The standard Compose example reads the three secrets from a local `.env` file.
 
 ### Configuration Fields (`config.json`)
 
@@ -129,37 +129,42 @@ The gateway refuses to start without `GATEWAY_API_KEY`. Set `INSECURE_DEV_MODE=t
 
 ### Running the published image
 
-Copy the configuration and choose an image tag:
+Download `compose.example.yaml`, `.env.example`, and `config.json.example` from this repository (or its release bundle) into an empty deployment directory, then create the local files:
 
 ```bash
+cp compose.example.yaml compose.yaml
+cp .env.example .env
 cp config.json.example config.json
-export TELEGRAM_GATEWAY_IMAGE='ghcr.io/klhq/telegram-gateway:<release-tag>'
+chmod 600 .env
 ```
 
-Load the three secret variables from your password manager or deployment system, then start Compose:
+Edit `.env` and set `TELEGRAM_BOT_TOKEN`, `GATEWAY_API_KEY`, and `WEBHOOK_SECRET`. Set `TELEGRAM_GATEWAY_IMAGE` to a release tag before deploying to a long-lived server. Edit `config.json` to add your strategy routes.
+
+Start the gateway:
 
 ```bash
-export TELEGRAM_BOT_TOKEN='<bot-token>'
-export GATEWAY_API_KEY='<gateway-api-key>'
-export WEBHOOK_SECRET='<callback-signing-secret>'
-docker compose -f compose.example.yaml pull
-docker compose -f compose.example.yaml up -d
+docker compose pull
+docker compose up -d
 ```
 
-Compose mounts those values under `/run/secrets`; the container receives only their `*_FILE` paths. The example binds the gateway to `127.0.0.1:8000`. Change the port mapping or attach an internal Docker network when another host or container must call `/send`.
+The example binds the gateway to `127.0.0.1:8000`. Change the port mapping or attach an internal Docker network when another host or container must call `/send`.
 
 Edit `config.json` to add or change callback routes, then restart the gateway because it reads configuration during startup:
 
 ```bash
-docker compose -f compose.example.yaml restart gateway
+docker compose restart gateway
 ```
 
-To upgrade, change `TELEGRAM_GATEWAY_IMAGE` to a new release tag and recreate the service:
+To upgrade, change `TELEGRAM_GATEWAY_IMAGE` in `.env`, then recreate the service:
 
 ```bash
-docker compose -f compose.example.yaml pull
-docker compose -f compose.example.yaml up -d
+docker compose pull
+docker compose up -d
 ```
+
+### Secret manager deployments
+
+The gateway also accepts `TELEGRAM_BOT_TOKEN_FILE`, `GATEWAY_API_KEY_FILE`, and `WEBHOOK_SECRET_FILE`. Use those variables when Komodo, Kubernetes, CI/CD, or another deployment platform mounts secrets as files. File-backed values override the matching values in `.env`.
 
 ### Running the development stack
 

@@ -6,27 +6,14 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${TELEGRAM_GATEWAY_PORT:-8000}:8000"
+    env_file:
+      - .env
     environment:
       CONFIG_PATH: /etc/telegram-gateway/config.json
-      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
-      GATEWAY_API_KEY_FILE: /run/secrets/gateway_api_key
-      WEBHOOK_SECRET_FILE: /run/secrets/webhook_secret
     volumes:
       - ./config.json:/etc/telegram-gateway/config.json:ro
-    secrets:
-      - telegram_bot_token
-      - gateway_api_key
-      - webhook_secret
     read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-
-secrets:
-  telegram_bot_token:
-    environment: TELEGRAM_BOT_TOKEN
-  gateway_api_key:
-    environment: GATEWAY_API_KEY
-  webhook_secret:
-    environment: WEBHOOK_SECRET
