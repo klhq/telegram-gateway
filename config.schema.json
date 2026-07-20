@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/klhq/telegram-gateway/blob/main/config.schema.json",
+  "title": "Telegram Gateway configuration",
+  "description": "Non-secret and legacy file-based configuration for Telegram Gateway. Secret values may instead be supplied at runtime through environment variables or file-backed secret variables.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "telegram_bot_token": {
+      "type": "string",
+      "minLength": 1,
+      "writeOnly": true,
+      "description": "Legacy file-based bot token. Prefer TELEGRAM_BOT_TOKEN_FILE for container deployments."
+    },
+    "telegram_chat_id": {
+      "type": "integer",
+      "description": "Optional default and authorized Telegram chat identifier."
+    },
+    "port": {
+      "type": "string",
+      "minLength": 1,
+      "default": "8000",
+      "description": "HTTP port on which the gateway listens."
+    },
+    "gateway_api_key": {
+      "type": "string",
+      "minLength": 1,
+      "writeOnly": true,
+      "description": "Legacy file-based API key. Prefer GATEWAY_API_KEY_FILE for container deployments."
+    },
+    "webhook_secret": {
+      "type": "string",
+      "minLength": 1,
+      "writeOnly": true,
+      "description": "Legacy file-based callback signing secret. Prefer WEBHOOK_SECRET_FILE for container deployments."
+    },
+    "log_level": {
+      "type": "string",
+      "enum": ["DEBUG", "INFO", "WARN", "ERROR"],
+      "default": "INFO"
+    },
+    "routes": {
+      "type": "object",
+      "description": "Map of callback_data prefixes to receiver HTTP URLs.",
+      "propertyNames": {
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "format": "uri"
+      },
+      "default": {}
+    },
+    "rate_limits": {
+      "$ref": "#/$defs/rateLimits"
+    }
+  },
+  "$defs": {
+    "rateLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "global_per_second": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 30.0
+        },
+        "chat_per_second": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1.0
+        }
+      }
+    }
+  }
+}

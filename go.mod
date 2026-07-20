@@ -4,8 +4,11 @@ go 1.26.4
 
 require (
 	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	golang.org/x/time v0.15.0
 )
+
+require golang.org/x/text v0.28.0 // indirect
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
