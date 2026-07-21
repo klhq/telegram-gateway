@@ -159,6 +159,60 @@ func TestSendEndpointSuccess(t *testing.T) {
 	}
 }
 
+func TestSendEndpointDefaultsToPlainText(t *testing.T) {
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/botmock-token/getMe" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+			return
+		}
+		if r.URL.Path != "/botmock-token/sendMessage" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("failed to parse form: %v", err)
+		}
+		if parseMode := r.FormValue("parse_mode"); parseMode != "" {
+			t.Errorf("expected no default parse mode, got %q", parseMode)
+		}
+
+		respBytes, _ := json.Marshal(tgbotapi.APIResponse{
+			Ok:     true,
+			Result: json.RawMessage(`{"message_id":999,"chat":{"id":123456789,"type":"private"},"date":1600000000}`),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(respBytes)
+	}))
+	defer telegramServer.Close()
+
+	bot, err := tgbotapi.NewBotAPIWithClient("mock-token", telegramServer.URL+"/bot%s/%s", http.DefaultClient)
+	if err != nil {
+		t.Fatalf("failed to create BotAPI: %v", err)
+	}
+	gw := &Gateway{Bot: bot, Config: &Config{TelegramBotToken: "mock-token", Port: "8000"}, Client: http.DefaultClient}
+
+	req := httptest.NewRequest(http.MethodPost, "/send", strings.NewReader(`{"chat_id":123456789,"text":"untrusted *text*"}`))
+	rr := httptest.NewRecorder()
+	gw.HandleSend(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSendEndpointRejectsUnsupportedParseMode(t *testing.T) {
+	gw := &Gateway{Config: &Config{TelegramBotToken: "mock-token", Port: "8000"}}
+	req := httptest.NewRequest(http.MethodPost, "/send", strings.NewReader(`{"chat_id":123456789,"text":"message","parse_mode":"PlainText"}`))
+	rr := httptest.NewRecorder()
+
+	gw.HandleSend(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestSendEndpointTelegramError(t *testing.T) {
 	// 1. Mock Telegram server returning error
 	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
