@@ -1,4 +1,4 @@
-module telegram-gateway
+module github.com/klhq/telegram-gateway
 
 go 1.26.4
 
