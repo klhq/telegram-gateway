@@ -156,6 +156,10 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 		gw.writeError(w, http.StatusBadRequest, "text is required")
 		return
 	}
+	if req.ParseMode != "" && req.ParseMode != "Markdown" && req.ParseMode != "MarkdownV2" && req.ParseMode != "HTML" {
+		gw.writeError(w, http.StatusBadRequest, "unsupported parse_mode")
+		return
+	}
 
 	// Enforce global rate limit
 	ctx := r.Context()
@@ -176,11 +180,8 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 
 	msg := tgbotapi.NewMessage(req.ChatID, req.Text)
 
-	// Default parse mode to Markdown unless overridden
 	if req.ParseMode != "" {
 		msg.ParseMode = req.ParseMode
-	} else {
-		msg.ParseMode = "Markdown"
 	}
 
 	if req.ReplyMarkup != nil {
