@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/tg-gateway.png" alt="Telegram Gateway Logo" width="160" height="160" />
+  <img src="https://raw.githubusercontent.com/klhq/telegram-gateway/main/assets/tg-gateway.png" alt="Telegram Gateway Logo" width="160" height="160" />
 </p>
 
 # Telegram Gateway
