@@ -138,8 +138,7 @@ components:
           example: "🚨 *ALERT*: New action detected!"
         parse_mode:
           type: string
-          description: Telegram parse mode for text formatting.
-          default: Markdown
+          description: Optional Telegram parse mode for text formatting. When omitted, the message is sent as plain text. Callers must escape untrusted interpolated values for the selected mode.
           enum:
             - Markdown
             - HTML

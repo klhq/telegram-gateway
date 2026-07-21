@@ -186,7 +186,9 @@ Allows downstream services to send a message to a specific chat. If `gateway_api
 #### Request Schema
 * `chat_id` (Integer): Target chat. Defaults to `telegram_chat_id` if omitted.
 * `text` (String): **Required.** Message content.
-* `parse_mode` (String): Formatting style: `Markdown`, `HTML`, `MarkdownV2`. Default: `Markdown`.
+* `parse_mode` (String, optional): Formatting style: `Markdown`, `HTML`, or `MarkdownV2`. When omitted, the gateway sends plain text.
+
+When using a parse mode, callers must escape any interpolated untrusted values according to that mode's Telegram escaping rules. The gateway deliberately does not sanitize message text, because doing so would corrupt intentionally formatted messages.
 * `disable_web_page_preview` (Boolean): Suppresses link webpage previews if `true`.
 * `disable_notification` (Boolean): Delivers the message silently (no sound/vibe) if `true`.
 * `reply_markup` (Object): InlineKeyboardMarkup definition.
