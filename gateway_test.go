@@ -1144,3 +1144,64 @@ func TestHTTPTransports(t *testing.T) {
 		}
 	})
 }
+
+func TestCallbackQueryRetryOn5xx(t *testing.T) {
+	attempts := 0
+	receiverServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"retry success"}`))
+	}))
+	defer receiverServer.Close()
+
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/botmock-token/getMe" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+			return
+		}
+		if r.URL.Path == "/botmock-token/answerCallbackQuery" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":true}`))
+			return
+		}
+	}))
+	defer telegramServer.Close()
+
+	botURL := telegramServer.URL + "/bot%s/%s"
+	bot, err := tgbotapi.NewBotAPIWithClient("mock-token", botURL, http.DefaultClient)
+	if err != nil {
+		t.Fatalf("failed to create bot: %v", err)
+	}
+
+	gw := &Gateway{
+		Bot: bot,
+		Config: &Config{
+			Routes: map[string]string{
+				"retry": receiverServer.URL + "/callback",
+			},
+		},
+		Client: http.DefaultClient,
+	}
+
+	update := tgbotapi.Update{
+		UpdateID: 1,
+		CallbackQuery: &tgbotapi.CallbackQuery{
+			ID:   "cb-retry",
+			Data: "retry:test",
+			From: &tgbotapi.User{ID: 100},
+		},
+	}
+
+	gw.HandleUpdate(update)
+
+	if attempts != 2 {
+		t.Errorf("expected 2 attempts (1 initial failure + 1 retry), got %d attempts", attempts)
+	}
+}
