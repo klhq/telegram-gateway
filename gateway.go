@@ -55,6 +55,13 @@ func TelegramHTTPTransport() *http.Transport {
 	}
 }
 
+const (
+	HeaderCorrelationID       = "X-Correlation-ID"
+	HeaderRequestID           = "X-Request-ID"
+	HeaderGatewaySignature    = "X-Gateway-Signature"
+	HeaderTelegramSecretToken = "X-Telegram-Bot-Api-Secret-Token"
+)
+
 // Gateway holds the state for the HTTP server and Telegram bot client
 type Gateway struct {
 	Bot    *tgbotapi.BotAPI
@@ -174,14 +181,14 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	correlationID := r.Header.Get("X-Correlation-ID")
+	correlationID := r.Header.Get(HeaderCorrelationID)
 	if correlationID == "" {
-		correlationID = r.Header.Get("X-Request-ID")
+		correlationID = r.Header.Get(HeaderRequestID)
 	}
 	if correlationID == "" {
 		correlationID = generateCorrelationID("send")
 	}
-	w.Header().Set("X-Correlation-ID", correlationID)
+	w.Header().Set(HeaderCorrelationID, correlationID)
 
 	var req SendRequest
 	dec := json.NewDecoder(r.Body)
@@ -435,6 +442,14 @@ func (gw *Gateway) forwardCallbackToReceiver(prefix string, targetURL string, pa
 		metricCallbackLatency.WithLabelValues(prefix).Observe(duration)
 	}()
 
+	// If webhook secret is configured, pre-calculate HMAC-SHA256 signature once outside retry loop
+	var signature string
+	if gw.Config.WebhookSecret != "" {
+		mac := hmac.New(sha256.New, []byte(gw.Config.WebhookSecret))
+		mac.Write(bodyBytes)
+		signature = hex.EncodeToString(mac.Sum(nil))
+	}
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
 		if err != nil {
@@ -442,15 +457,11 @@ func (gw *Gateway) forwardCallbackToReceiver(prefix string, targetURL string, pa
 			return fmt.Errorf("failed to create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Correlation-ID", correlationID)
-		req.Header.Set("X-Request-ID", correlationID)
+		req.Header.Set(HeaderCorrelationID, correlationID)
+		req.Header.Set(HeaderRequestID, correlationID)
 
-		// If webhook secret is configured, sign the request body with HMAC-SHA256
-		if gw.Config.WebhookSecret != "" {
-			mac := hmac.New(sha256.New, []byte(gw.Config.WebhookSecret))
-			mac.Write(bodyBytes)
-			signature := hex.EncodeToString(mac.Sum(nil))
-			req.Header.Set("X-Gateway-Signature", signature)
+		if signature != "" {
+			req.Header.Set(HeaderGatewaySignature, signature)
 		}
 
 		resp, err = gw.Client.Do(req)
@@ -594,7 +605,7 @@ func (gw *Gateway) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Validate secret token if TELEGRAM_WEBHOOK_SECRET is set
 	if gw.Config.TelegramWebhookSecret != "" {
-		secretHeader := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
+		secretHeader := r.Header.Get(HeaderTelegramSecretToken)
 		if secretHeader != gw.Config.TelegramWebhookSecret {
 			slog.Warn("Unauthorized webhook request: secret token mismatch")
 			gw.writeError(w, http.StatusUnauthorized, "Unauthorized webhook request")
@@ -666,6 +677,27 @@ func parseTelegramRetryAfter(err error) time.Duration {
 		return 0
 	}
 	return time.Duration(n) * time.Second
+}
+
+// RegisterWebhook registers the configured webhook URL and secret token with the Telegram Bot API.
+func (gw *Gateway) RegisterWebhook() error {
+	if gw.Config == nil || strings.ToLower(gw.Config.Mode) != "webhook" {
+		return nil
+	}
+	fullWebhookURL := strings.TrimRight(gw.Config.WebhookURL, "/") + gw.Config.WebhookPath
+	slog.Info("Configuring Telegram Webhook...", "url", fullWebhookURL)
+
+	params := tgbotapi.Params{
+		"url": fullWebhookURL,
+	}
+	if gw.Config.TelegramWebhookSecret != "" {
+		params["secret_token"] = gw.Config.TelegramWebhookSecret
+	}
+	if _, err := gw.Bot.MakeRequest("setWebhook", params); err != nil {
+		return fmt.Errorf("failed to register Telegram Webhook: %w", err)
+	}
+	slog.Info("Telegram Webhook registered successfully", "path", gw.Config.WebhookPath)
+	return nil
 }
 
 // generateCorrelationID creates a unique correlation identifier for end-to-end tracing.
