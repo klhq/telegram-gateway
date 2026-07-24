@@ -1072,3 +1072,47 @@ func TestCorrelationID(t *testing.T) {
 		}
 	})
 }
+
+func TestSendEndpointRateLimitPropagation(t *testing.T) {
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/botmock-token/getMe" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+			return
+		}
+
+		if r.URL.Path == "/botmock-token/sendMessage" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 5"}`))
+			return
+		}
+	}))
+	defer telegramServer.Close()
+
+	botURL := telegramServer.URL + "/bot%s/%s"
+	bot, err := tgbotapi.NewBotAPIWithClient("mock-token", botURL, http.DefaultClient)
+	if err != nil {
+		t.Fatalf("failed to create BotAPI: %v", err)
+	}
+
+	gw := &Gateway{
+		Bot:    bot,
+		Config: &Config{},
+	}
+
+	reqBody := `{"chat_id":123456789, "text":"test message"}`
+	req := httptest.NewRequest(http.MethodPost, "/send", strings.NewReader(reqBody))
+	rr := httptest.NewRecorder()
+
+	gw.HandleSend(rr, req)
+
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("expected status 429, got %d", rr.Code)
+	}
+
+	if retryAfter := rr.Header().Get("Retry-After"); retryAfter != "5" {
+		t.Errorf("expected Retry-After header '5', got '%s'", retryAfter)
+	}
+}

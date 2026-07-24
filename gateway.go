@@ -180,6 +180,7 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	gw.initRateLimiters()
 	if err := gw.globalLimiter.Wait(ctx); err != nil {
 		slog.Error("Global rate limiter wait error", "error", err, "correlation_id", correlationID)
+		w.Header().Set("Retry-After", "1")
 		gw.writeError(w, http.StatusTooManyRequests, "Rate limit wait timeout")
 		return
 	}
@@ -188,6 +189,7 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	chatLimiter := gw.getChatLimiter(req.ChatID)
 	if err := chatLimiter.Wait(ctx); err != nil {
 		slog.Error("Chat rate limiter wait error", "error", err, "chat_id", req.ChatID, "correlation_id", correlationID)
+		w.Header().Set("Retry-After", "1")
 		gw.writeError(w, http.StatusTooManyRequests, "Rate limit wait timeout")
 		return
 	}
@@ -208,6 +210,11 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	sentMsg, err := gw.Bot.Send(msg)
 	if err != nil {
 		slog.Error("Error sending message via Telegram", "error", err, "chat_id", req.ChatID, "correlation_id", correlationID)
+		if retryAfter := parseTelegramRetryAfter(err); retryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
+			gw.writeError(w, http.StatusTooManyRequests, err.Error())
+			return
+		}
 		gw.writeError(w, http.StatusInternalServerError, "Failed to send message")
 		return
 	}
