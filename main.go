@@ -67,8 +67,11 @@ func main() {
 		"telegram_bot_token", tokenDisplay,
 	)
 
-	// Initialize Telegram Bot Client
-	bot, err := tgbotapi.NewBotAPI(cfg.TelegramBotToken)
+	// Initialize Telegram Bot Client with tuned HTTP transport
+	tgClient := &http.Client{
+		Transport: TelegramHTTPTransport(),
+	}
+	bot, err := tgbotapi.NewBotAPIWithClient(cfg.TelegramBotToken, tgbotapi.APIEndpoint, tgClient)
 	if err != nil {
 		slog.Error("Failed to initialize Telegram Bot", "error", err)
 		os.Exit(1)
@@ -81,7 +84,8 @@ func main() {
 		Bot:    bot,
 		Config: cfg,
 		Client: &http.Client{
-			Timeout: 10 * time.Second, // fallback timeout for http client
+			Transport: DefaultHTTPTransport(),
+			Timeout:   10 * time.Second, // fallback timeout for http client
 		},
 	}
 

@@ -1116,3 +1116,31 @@ func TestSendEndpointRateLimitPropagation(t *testing.T) {
 		t.Errorf("expected Retry-After header '5', got '%s'", retryAfter)
 	}
 }
+
+func TestHTTPTransports(t *testing.T) {
+	t.Run("DefaultHTTPTransport settings", func(t *testing.T) {
+		tr := DefaultHTTPTransport()
+		if tr.MaxIdleConns != 100 {
+			t.Errorf("expected MaxIdleConns 100, got %d", tr.MaxIdleConns)
+		}
+		if tr.MaxIdleConnsPerHost != 25 {
+			t.Errorf("expected MaxIdleConnsPerHost 25, got %d", tr.MaxIdleConnsPerHost)
+		}
+		if tr.IdleConnTimeout != 90*time.Second {
+			t.Errorf("expected IdleConnTimeout 90s, got %v", tr.IdleConnTimeout)
+		}
+	})
+
+	t.Run("TelegramHTTPTransport settings", func(t *testing.T) {
+		tr := TelegramHTTPTransport()
+		if tr.MaxIdleConns != 50 {
+			t.Errorf("expected MaxIdleConns 50, got %d", tr.MaxIdleConns)
+		}
+		if tr.MaxIdleConnsPerHost != 10 {
+			t.Errorf("expected MaxIdleConnsPerHost 10, got %d", tr.MaxIdleConnsPerHost)
+		}
+		if tr.IdleConnTimeout != 120*time.Second {
+			t.Errorf("expected IdleConnTimeout 120s, got %v", tr.IdleConnTimeout)
+		}
+	})
+}
