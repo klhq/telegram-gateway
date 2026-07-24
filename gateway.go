@@ -514,7 +514,6 @@ func (gw *Gateway) forwardCallbackToReceiver(prefix string, targetURL string, pa
 	return nil
 }
 
-
 // answerCallback calls Telegram's answerCallbackQuery method to acknowledge the callback
 func (gw *Gateway) answerCallback(callbackQueryID string, text string, showAlert bool) {
 	callbackConfig := tgbotapi.NewCallback(callbackQueryID, text)
