@@ -1205,3 +1205,90 @@ func TestCallbackQueryRetryOn5xx(t *testing.T) {
 		t.Errorf("expected 2 attempts (1 initial failure + 1 retry), got %d attempts", attempts)
 	}
 }
+
+func TestHandleWebhook(t *testing.T) {
+	t.Run("invalid method returns 405", func(t *testing.T) {
+		gw := &Gateway{Config: &Config{}}
+		req := httptest.NewRequest(http.MethodGet, "/webhook", nil)
+		rr := httptest.NewRecorder()
+		gw.HandleWebhook(rr, req)
+
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected status 405, got %d", rr.Code)
+		}
+	})
+
+	t.Run("unauthorized token returns 401", func(t *testing.T) {
+		gw := &Gateway{
+			Config: &Config{
+				TelegramWebhookSecret: "secret-123",
+			},
+		}
+		reqBody := `{"update_id":1}`
+		req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(reqBody))
+		req.Header.Set("X-Telegram-Bot-Api-Secret-Token", "wrong-secret")
+		rr := httptest.NewRecorder()
+		gw.HandleWebhook(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rr.Code)
+		}
+	})
+
+	t.Run("valid webhook update returns 200 and processes update", func(t *testing.T) {
+		received := false
+		receiverServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			received = true
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer receiverServer.Close()
+
+		telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/botmock-token/getMe" || r.URL.Path == "/botmock-token/answerCallbackQuery" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"ok":true,"result":true}`))
+				return
+			}
+		}))
+		defer telegramServer.Close()
+
+		botURL := telegramServer.URL + "/bot%s/%s"
+		bot, _ := tgbotapi.NewBotAPIWithClient("mock-token", botURL, http.DefaultClient)
+
+		gw := &Gateway{
+			Bot: bot,
+			Config: &Config{
+				TelegramWebhookSecret: "secret-123",
+				Routes: map[string]string{
+					"wb": receiverServer.URL + "/callback",
+				},
+			},
+			Client: http.DefaultClient,
+		}
+
+		reqBody := `{
+			"update_id": 99,
+			"callback_query": {
+				"id": "cb-wb",
+				"data": "wb:test",
+				"from": {"id": 888}
+			}
+		}`
+		req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(reqBody))
+		req.Header.Set("X-Telegram-Bot-Api-Secret-Token", "secret-123")
+		rr := httptest.NewRecorder()
+
+		gw.HandleWebhook(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
+		}
+
+		gw.WG.Wait()
+
+		if !received {
+			t.Error("expected update payload to be forwarded to receiver server")
+		}
+	})
+}

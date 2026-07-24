@@ -17,14 +17,18 @@ type RateLimits struct {
 
 // Config holds all gateway configuration loaded from a JSON file
 type Config struct {
-	TelegramBotToken string            `json:"telegram_bot_token"`
-	TelegramChatID   int64             `json:"telegram_chat_id"`
-	Port             string            `json:"port"`
-	GatewayAPIKey    string            `json:"gateway_api_key"`
-	Routes           map[string]string `json:"routes"`
-	RateLimits       RateLimits        `json:"rate_limits"`
-	WebhookSecret    string            `json:"webhook_secret"`
-	LogLevel         string            `json:"log_level"`
+	TelegramBotToken      string            `json:"telegram_bot_token"`
+	TelegramChatID        int64             `json:"telegram_chat_id"`
+	Port                  string            `json:"port"`
+	GatewayAPIKey         string            `json:"gateway_api_key"`
+	Routes                map[string]string `json:"routes"`
+	RateLimits            RateLimits        `json:"rate_limits"`
+	WebhookSecret         string            `json:"webhook_secret"`
+	LogLevel              string            `json:"log_level"`
+	Mode                  string            `json:"mode"`
+	WebhookURL            string            `json:"webhook_url"`
+	WebhookPath           string            `json:"webhook_path"`
+	TelegramWebhookSecret string            `json:"telegram_webhook_secret"`
 }
 
 // LoadConfig loads the configuration from a JSON file path
@@ -56,6 +60,7 @@ func LoadConfig(path string) (*Config, error) {
 		{&cfg.TelegramBotToken, "TELEGRAM_BOT_TOKEN"},
 		{&cfg.GatewayAPIKey, "GATEWAY_API_KEY"},
 		{&cfg.WebhookSecret, "WEBHOOK_SECRET"},
+		{&cfg.TelegramWebhookSecret, "TELEGRAM_WEBHOOK_SECRET"},
 	} {
 		if err := applySecretSource(secret.value, secret.envName); err != nil {
 			return nil, err
@@ -92,6 +97,27 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.LogLevel = "INFO"
 	}
 
+	// Default mode
+	if cfg.Mode == "" {
+		cfg.Mode = "polling"
+	}
+	cfg.Mode = strings.ToLower(cfg.Mode)
+	if cfg.Mode != "polling" && cfg.Mode != "webhook" {
+		return nil, fmt.Errorf("invalid mode %q: must be 'polling' or 'webhook'", cfg.Mode)
+	}
+
+	if cfg.Mode == "webhook" {
+		if cfg.WebhookURL == "" {
+			return nil, fmt.Errorf("webhook_url is required when mode is 'webhook'")
+		}
+		if cfg.WebhookPath == "" {
+			cfg.WebhookPath = "/webhook"
+		}
+		if !strings.HasPrefix(cfg.WebhookPath, "/") {
+			cfg.WebhookPath = "/" + cfg.WebhookPath
+		}
+	}
+
 	return &cfg, nil
 }
 
@@ -101,6 +127,15 @@ func applyEnvironmentOverrides(cfg *Config) {
 	}
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
 		cfg.LogLevel = logLevel
+	}
+	if mode := os.Getenv("MODE"); mode != "" {
+		cfg.Mode = mode
+	}
+	if webhookURL := os.Getenv("WEBHOOK_URL"); webhookURL != "" {
+		cfg.WebhookURL = webhookURL
+	}
+	if webhookPath := os.Getenv("WEBHOOK_PATH"); webhookPath != "" {
+		cfg.WebhookPath = webhookPath
 	}
 	if chatID := os.Getenv("TELEGRAM_CHAT_ID"); chatID != "" {
 		if parsed, err := strconv.ParseInt(chatID, 10, 64); err == nil {

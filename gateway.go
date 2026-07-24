@@ -516,6 +516,9 @@ func (gw *Gateway) forwardCallbackToReceiver(prefix string, targetURL string, pa
 
 // answerCallback calls Telegram's answerCallbackQuery method to acknowledge the callback
 func (gw *Gateway) answerCallback(callbackQueryID string, text string, showAlert bool) {
+	if gw.Bot == nil {
+		return
+	}
 	callbackConfig := tgbotapi.NewCallback(callbackQueryID, text)
 	callbackConfig.ShowAlert = showAlert
 
@@ -582,6 +585,43 @@ func (gw *Gateway) HandleReady(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleWebhook handles incoming POST update payloads sent by Telegram Webhook.
+func (gw *Gateway) HandleWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		gw.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// Validate secret token if TELEGRAM_WEBHOOK_SECRET is set
+	if gw.Config.TelegramWebhookSecret != "" {
+		secretHeader := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
+		if secretHeader != gw.Config.TelegramWebhookSecret {
+			slog.Warn("Unauthorized webhook request: secret token mismatch")
+			gw.writeError(w, http.StatusUnauthorized, "Unauthorized webhook request")
+			return
+		}
+	}
+
+	var update tgbotapi.Update
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		slog.Error("Failed to decode webhook JSON update", "error", err)
+		gw.writeError(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+
+	// Record successful health timestamp
+	gw.lastPollSuccess.Store(time.Now().Unix())
+
+	// Dispatch update handling asynchronously
+	gw.WG.Add(1)
+	go func(up tgbotapi.Update) {
+		defer gw.WG.Done()
+		gw.HandleUpdate(up)
+	}(update)
+
+	w.WriteHeader(http.StatusOK)
+}
+
 // Routes returns the configured HTTP handler for all gateway endpoints
 func (gw *Gateway) Routes() http.Handler {
 	mux := http.NewServeMux()
@@ -589,6 +629,15 @@ func (gw *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/health", gw.HandleHealth)
 	mux.HandleFunc("/ready", gw.HandleReady)
 	mux.Handle("/metrics", promhttp.Handler())
+
+	if gw.Config != nil && strings.ToLower(gw.Config.Mode) == "webhook" {
+		webhookPath := gw.Config.WebhookPath
+		if webhookPath == "" {
+			webhookPath = "/webhook"
+		}
+		mux.HandleFunc(webhookPath, gw.HandleWebhook)
+	}
+
 	return mux
 }
 
