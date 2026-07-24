@@ -116,20 +116,10 @@ func main() {
 	defer cancel()
 
 	if strings.ToLower(cfg.Mode) == "webhook" {
-		fullWebhookURL := strings.TrimRight(cfg.WebhookURL, "/") + cfg.WebhookPath
-		slog.Info("Configuring Telegram Webhook...", "url", fullWebhookURL)
-
-		params := tgbotapi.Params{
-			"url": fullWebhookURL,
-		}
-		if cfg.TelegramWebhookSecret != "" {
-			params["secret_token"] = cfg.TelegramWebhookSecret
-		}
-		if _, err := bot.MakeRequest("setWebhook", params); err != nil {
-			slog.Error("Failed to register Telegram Webhook", "error", err)
+		if err := gw.RegisterWebhook(); err != nil {
+			slog.Error("Webhook registration failed", "error", err)
 			os.Exit(1)
 		}
-		slog.Info("Telegram Webhook registered successfully", "path", cfg.WebhookPath)
 	} else {
 		// Start updates polling loop in background
 		go gw.StartUpdateLoop(ctx)
