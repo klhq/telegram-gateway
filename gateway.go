@@ -414,7 +414,7 @@ func (gw *Gateway) HandleUpdate(update tgbotapi.Update) {
 	}
 }
 
-// forwardCallbackToReceiver POSTs payload to receiver and answers the Telegram callback query accordingly
+// forwardCallbackToReceiver POSTs payload to receiver with transient retries and answers the Telegram callback query accordingly
 func (gw *Gateway) forwardCallbackToReceiver(prefix string, targetURL string, payload CallbackPayload, correlationID string) error {
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -425,38 +425,79 @@ func (gw *Gateway) forwardCallbackToReceiver(prefix string, targetURL string, pa
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		metricCallbackForward.WithLabelValues(prefix, "request_create_error").Inc()
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Correlation-ID", correlationID)
-	req.Header.Set("X-Request-ID", correlationID)
-
-	// If webhook secret is configured, sign the request body with HMAC-SHA256
-	if gw.Config.WebhookSecret != "" {
-		mac := hmac.New(sha256.New, []byte(gw.Config.WebhookSecret))
-		mac.Write(bodyBytes)
-		signature := hex.EncodeToString(mac.Sum(nil))
-		req.Header.Set("X-Gateway-Signature", signature)
-	}
+	maxAttempts := 3
+	var lastErr error
+	var resp *http.Response
 
 	startTime := time.Now()
-	resp, err := gw.Client.Do(req)
-	duration := time.Since(startTime).Seconds()
-	metricCallbackLatency.WithLabelValues(prefix).Observe(duration)
+	defer func() {
+		duration := time.Since(startTime).Seconds()
+		metricCallbackLatency.WithLabelValues(prefix).Observe(duration)
+	}()
 
-	if err != nil {
-		metricCallbackForward.WithLabelValues(prefix, "transport_error").Inc()
-		return fmt.Errorf("request failed: %w", err)
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
+		if err != nil {
+			metricCallbackForward.WithLabelValues(prefix, "request_create_error").Inc()
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Correlation-ID", correlationID)
+		req.Header.Set("X-Request-ID", correlationID)
+
+		// If webhook secret is configured, sign the request body with HMAC-SHA256
+		if gw.Config.WebhookSecret != "" {
+			mac := hmac.New(sha256.New, []byte(gw.Config.WebhookSecret))
+			mac.Write(bodyBytes)
+			signature := hex.EncodeToString(mac.Sum(nil))
+			req.Header.Set("X-Gateway-Signature", signature)
+		}
+
+		resp, err = gw.Client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("request failed: %w", err)
+			if attempt < maxAttempts {
+				slog.Warn("Transient error forwarding callback, retrying...", "prefix", prefix, "attempt", attempt, "error", err, "correlation_id", correlationID)
+				select {
+				case <-time.After(time.Duration(attempt*100) * time.Millisecond):
+					continue
+				case <-ctx.Done():
+					metricCallbackForward.WithLabelValues(prefix, "timeout").Inc()
+					return fmt.Errorf("request timeout during retry: %w", ctx.Err())
+				}
+			}
+			metricCallbackForward.WithLabelValues(prefix, "transport_error").Inc()
+			return lastErr
+		}
+
+		// 5xx Server Errors are retryable; 4xx Client Errors are not
+		if resp.StatusCode >= 500 && resp.StatusCode <= 599 {
+			_ = resp.Body.Close()
+			lastErr = fmt.Errorf("receiver returned status code %d", resp.StatusCode)
+			if attempt < maxAttempts {
+				slog.Warn("Receiver returned 5xx status code, retrying...", "prefix", prefix, "attempt", attempt, "status_code", resp.StatusCode, "correlation_id", correlationID)
+				select {
+				case <-time.After(time.Duration(attempt*100) * time.Millisecond):
+					continue
+				case <-ctx.Done():
+					metricCallbackForward.WithLabelValues(prefix, "timeout").Inc()
+					return fmt.Errorf("request timeout during retry: %w", ctx.Err())
+				}
+			}
+			metricCallbackForward.WithLabelValues(prefix, "status_"+strconv.Itoa(resp.StatusCode)).Inc()
+			return lastErr
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			defer resp.Body.Close()
+			metricCallbackForward.WithLabelValues(prefix, "status_"+strconv.Itoa(resp.StatusCode)).Inc()
+			return fmt.Errorf("receiver returned status code %d", resp.StatusCode)
+		}
+
+		// Successful 200 OK response
+		break
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		metricCallbackForward.WithLabelValues(prefix, "status_"+strconv.Itoa(resp.StatusCode)).Inc()
-		return fmt.Errorf("receiver returned status code %d", resp.StatusCode)
-	}
 
 	// Read optional response JSON
 	var rxResp ReceiverResponse
@@ -472,6 +513,7 @@ func (gw *Gateway) forwardCallbackToReceiver(prefix string, targetURL string, pa
 	metricCallbackForward.WithLabelValues(prefix, "success_response").Inc()
 	return nil
 }
+
 
 // answerCallback calls Telegram's answerCallbackQuery method to acknowledge the callback
 func (gw *Gateway) answerCallback(callbackQueryID string, text string, showAlert bool) {
