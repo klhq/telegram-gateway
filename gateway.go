@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -27,6 +28,9 @@ type Gateway struct {
 	Config *Config
 	Client *http.Client
 	WG     sync.WaitGroup
+
+	// Health / Readiness
+	lastPollSuccess atomic.Int64
 
 	// Rate Limiting
 	limiterOnce   sync.Once
@@ -258,8 +262,9 @@ func (gw *Gateway) StartUpdateLoop(ctx context.Context) {
 				}
 				continue
 			}
-			// Successful poll — reset backoff
+			// Successful poll — reset backoff and update health timestamp
 			backoffAttempt = 0
+			gw.lastPollSuccess.Store(time.Now().Unix())
 
 			for _, update := range updates {
 				// Record metric for incoming update
@@ -433,7 +438,7 @@ func (gw *Gateway) writeError(w http.ResponseWriter, statusCode int, message str
 	metricSendRequests.WithLabelValues(strconv.Itoa(statusCode)).Inc()
 }
 
-// HandleHealth handles GET /health requests
+// HandleHealth handles GET /health requests (Liveness check)
 func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		gw.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -444,11 +449,51 @@ func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok"}`))
 }
 
+// HandleReady handles GET /ready requests and returns 200 OK if polling is healthy (poll within 2 minutes),
+// or 503 Service Unavailable if polling has stalled.
+func (gw *Gateway) HandleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		gw.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	lastPoll := gw.lastPollSuccess.Load()
+	if lastPoll == 0 {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status": "not_ready",
+			"reason": "polling loop not active or first poll pending",
+		})
+		return
+	}
+
+	stalledThreshold := 2 * time.Minute
+	timeSinceLastPoll := time.Since(time.Unix(lastPoll, 0))
+
+	if timeSinceLastPoll > stalledThreshold {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":             "not_ready",
+			"reason":             "polling_stalled",
+			"seconds_since_poll": int(timeSinceLastPoll.Seconds()),
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":             "ok",
+		"seconds_since_poll": int(timeSinceLastPoll.Seconds()),
+	})
+}
+
 // Routes returns the configured HTTP handler for all gateway endpoints
 func (gw *Gateway) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/send", gw.requireAuth(gw.HandleSend))
 	mux.HandleFunc("/health", gw.HandleHealth)
+	mux.HandleFunc("/ready", gw.HandleReady)
 	mux.Handle("/metrics", promhttp.Handler())
 	return mux
 }

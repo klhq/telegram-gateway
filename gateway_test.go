@@ -899,3 +899,50 @@ func TestParseTelegramRetryAfter(t *testing.T) {
 		})
 	}
 }
+
+func TestReadyEndpoint(t *testing.T) {
+	gw := &Gateway{}
+
+	t.Run("uninitialized polling returns 503", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+		rr := httptest.NewRecorder()
+		gw.HandleReady(rr, req)
+
+		if rr.Code != http.StatusServiceUnavailable {
+			t.Errorf("expected status 503, got %d", rr.Code)
+		}
+	})
+
+	t.Run("healthy polling returns 200", func(t *testing.T) {
+		gw.lastPollSuccess.Store(time.Now().Unix())
+		req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+		rr := httptest.NewRecorder()
+		gw.HandleReady(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
+		}
+	})
+
+	t.Run("stalled polling returns 503", func(t *testing.T) {
+		threeMinutesAgo := time.Now().Add(-3 * time.Minute).Unix()
+		gw.lastPollSuccess.Store(threeMinutesAgo)
+		req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+		rr := httptest.NewRecorder()
+		gw.HandleReady(rr, req)
+
+		if rr.Code != http.StatusServiceUnavailable {
+			t.Errorf("expected status 503, got %d", rr.Code)
+		}
+	})
+
+	t.Run("invalid method returns 405", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/ready", nil)
+		rr := httptest.NewRecorder()
+		gw.HandleReady(rr, req)
+
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected status 405, got %d", rr.Code)
+		}
+	})
+}
