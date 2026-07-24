@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -141,6 +142,15 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	correlationID := r.Header.Get("X-Correlation-ID")
+	if correlationID == "" {
+		correlationID = r.Header.Get("X-Request-ID")
+	}
+	if correlationID == "" {
+		correlationID = generateCorrelationID("send")
+	}
+	w.Header().Set("X-Correlation-ID", correlationID)
+
 	var req SendRequest
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&req); err != nil {
@@ -169,7 +179,7 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	gw.initRateLimiters()
 	if err := gw.globalLimiter.Wait(ctx); err != nil {
-		slog.Error("Global rate limiter wait error", "error", err)
+		slog.Error("Global rate limiter wait error", "error", err, "correlation_id", correlationID)
 		gw.writeError(w, http.StatusTooManyRequests, "Rate limit wait timeout")
 		return
 	}
@@ -177,7 +187,7 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	// Enforce per-chat rate limit
 	chatLimiter := gw.getChatLimiter(req.ChatID)
 	if err := chatLimiter.Wait(ctx); err != nil {
-		slog.Error("Chat rate limiter wait error", "error", err, "chat_id", req.ChatID)
+		slog.Error("Chat rate limiter wait error", "error", err, "chat_id", req.ChatID, "correlation_id", correlationID)
 		gw.writeError(w, http.StatusTooManyRequests, "Rate limit wait timeout")
 		return
 	}
@@ -197,7 +207,7 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 
 	sentMsg, err := gw.Bot.Send(msg)
 	if err != nil {
-		slog.Error("Error sending message via Telegram", "error", err, "chat_id", req.ChatID)
+		slog.Error("Error sending message via Telegram", "error", err, "chat_id", req.ChatID, "correlation_id", correlationID)
 		gw.writeError(w, http.StatusInternalServerError, "Failed to send message")
 		return
 	}
@@ -299,6 +309,7 @@ func (gw *Gateway) HandleUpdate(update tgbotapi.Update) {
 	}
 
 	cb := update.CallbackQuery
+	correlationID := generateCorrelationID("cb")
 
 	// If telegram_chat_id is configured (non-zero), enforce that the callback query
 	// originates from this chat to prevent unauthorized group/private chat callback triggers.
@@ -313,6 +324,7 @@ func (gw *Gateway) HandleUpdate(update tgbotapi.Update) {
 					return 0
 				}(),
 				"callback_id", cb.ID,
+				"correlation_id", correlationID,
 			)
 			gw.answerCallback(cb.ID, "Unauthorized chat source", true)
 			metricCallbackForward.WithLabelValues("unauthorized", "unauthorized_chat").Inc()
@@ -337,7 +349,7 @@ func (gw *Gateway) HandleUpdate(update tgbotapi.Update) {
 	}
 
 	if targetURL == "" {
-		slog.Warn("Received callback query with unknown prefix", "data", data, "callback_id", cb.ID)
+		slog.Warn("Received callback query with unknown prefix", "data", data, "callback_id", cb.ID, "correlation_id", correlationID)
 		gw.answerCallback(cb.ID, "Unknown callback query prefix", true)
 		metricCallbackForward.WithLabelValues("unknown", "unknown_prefix").Inc()
 		return
@@ -356,15 +368,15 @@ func (gw *Gateway) HandleUpdate(update tgbotapi.Update) {
 	}
 
 	// Forward payload to the receiver backend via POST with 5s timeout
-	err := gw.forwardCallbackToReceiver(matchedPrefix, targetURL, payload)
+	err := gw.forwardCallbackToReceiver(matchedPrefix, targetURL, payload, correlationID)
 	if err != nil {
-		slog.Error("Error forwarding callback to receiver", "prefix", matchedPrefix, "target_url", targetURL, "error", err)
+		slog.Error("Error forwarding callback to receiver", "prefix", matchedPrefix, "target_url", targetURL, "correlation_id", correlationID, "error", err)
 		gw.answerCallback(cb.ID, "Receiver backend unreachable", true)
 	}
 }
 
 // forwardCallbackToReceiver POSTs payload to receiver and answers the Telegram callback query accordingly
-func (gw *Gateway) forwardCallbackToReceiver(prefix string, targetURL string, payload CallbackPayload) error {
+func (gw *Gateway) forwardCallbackToReceiver(prefix string, targetURL string, payload CallbackPayload, correlationID string) error {
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
 		metricCallbackForward.WithLabelValues(prefix, "marshal_error").Inc()
@@ -380,6 +392,8 @@ func (gw *Gateway) forwardCallbackToReceiver(prefix string, targetURL string, pa
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Correlation-ID", correlationID)
+	req.Header.Set("X-Request-ID", correlationID)
 
 	// If webhook secret is configured, sign the request body with HMAC-SHA256
 	if gw.Config.WebhookSecret != "" {
@@ -523,4 +537,11 @@ func parseTelegramRetryAfter(err error) time.Duration {
 		return 0
 	}
 	return time.Duration(n) * time.Second
+}
+
+// generateCorrelationID creates a unique correlation identifier for end-to-end tracing.
+func generateCorrelationID(prefix string) string {
+	b := make([]byte, 8)
+	_, _ = crand.Read(b)
+	return fmt.Sprintf("%s-%x", prefix, b)
 }

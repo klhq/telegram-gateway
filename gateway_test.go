@@ -946,3 +946,129 @@ func TestReadyEndpoint(t *testing.T) {
 		}
 	})
 }
+
+func TestCorrelationID(t *testing.T) {
+	t.Run("HandleSend preserves existing X-Correlation-ID", func(t *testing.T) {
+		telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/botmock-token/getMe" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+				return
+			}
+			if r.URL.Path == "/botmock-token/sendMessage" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"ok":true,"result":{"message_id":42,"chat":{"id":100}}}`))
+				return
+			}
+		}))
+		defer telegramServer.Close()
+
+		botURL := telegramServer.URL + "/bot%s/%s"
+		bot, err := tgbotapi.NewBotAPIWithClient("mock-token", botURL, http.DefaultClient)
+		if err != nil {
+			t.Fatalf("failed to create bot: %v", err)
+		}
+
+		gw := &Gateway{Bot: bot, Config: &Config{}}
+		reqBody := `{"chat_id":100, "text":"hello"}`
+		req := httptest.NewRequest(http.MethodPost, "/send", strings.NewReader(reqBody))
+		req.Header.Set("X-Correlation-ID", "my-custom-cid")
+		rr := httptest.NewRecorder()
+
+		gw.HandleSend(rr, req)
+
+		if got := rr.Header().Get("X-Correlation-ID"); got != "my-custom-cid" {
+			t.Errorf("expected X-Correlation-ID 'my-custom-cid', got '%s'", got)
+		}
+	})
+
+	t.Run("HandleSend generates X-Correlation-ID if missing", func(t *testing.T) {
+		telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/botmock-token/getMe" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+				return
+			}
+			if r.URL.Path == "/botmock-token/sendMessage" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"ok":true,"result":{"message_id":42,"chat":{"id":100}}}`))
+				return
+			}
+		}))
+		defer telegramServer.Close()
+
+		botURL := telegramServer.URL + "/bot%s/%s"
+		bot, err := tgbotapi.NewBotAPIWithClient("mock-token", botURL, http.DefaultClient)
+		if err != nil {
+			t.Fatalf("failed to create bot: %v", err)
+		}
+
+		gw := &Gateway{Bot: bot, Config: &Config{}}
+		reqBody := `{"chat_id":100, "text":"hello"}`
+		req := httptest.NewRequest(http.MethodPost, "/send", strings.NewReader(reqBody))
+		rr := httptest.NewRecorder()
+
+		gw.HandleSend(rr, req)
+
+		got := rr.Header().Get("X-Correlation-ID")
+		if !strings.HasPrefix(got, "send-") {
+			t.Errorf("expected generated X-Correlation-ID to start with 'send-', got '%s'", got)
+		}
+	})
+
+	t.Run("forwardCallbackToReceiver forwards X-Correlation-ID", func(t *testing.T) {
+		var receivedCorrelationID string
+		receiverServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedCorrelationID = r.Header.Get("X-Correlation-ID")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer receiverServer.Close()
+
+		telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/botmock-token/getMe" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+				return
+			}
+			if r.URL.Path == "/botmock-token/answerCallbackQuery" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"ok":true,"result":true}`))
+				return
+			}
+		}))
+		defer telegramServer.Close()
+
+		botURL := telegramServer.URL + "/bot%s/%s"
+		bot, _ := tgbotapi.NewBotAPIWithClient("mock-token", botURL, http.DefaultClient)
+		gw := &Gateway{
+			Bot: bot,
+			Config: &Config{
+				Routes: map[string]string{
+					"rec": receiverServer.URL + "/callback",
+				},
+			},
+			Client: http.DefaultClient,
+		}
+
+		update := tgbotapi.Update{
+			UpdateID: 1,
+			CallbackQuery: &tgbotapi.CallbackQuery{
+				ID:   "cb-123",
+				Data: "rec:test",
+				From: &tgbotapi.User{ID: 1},
+			},
+		}
+
+		gw.HandleUpdate(update)
+
+		if !strings.HasPrefix(receivedCorrelationID, "cb-") {
+			t.Errorf("expected forwarded X-Correlation-ID to start with 'cb-', got '%s'", receivedCorrelationID)
+		}
+	})
+}
