@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -853,5 +854,48 @@ func TestCallbackQuerySigning(t *testing.T) {
 
 	if signatureReceived != expectedSig {
 		t.Errorf("expected signature '%s', got '%s'", expectedSig, signatureReceived)
+	}
+}
+
+func TestParseTelegramRetryAfter(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantSecs int
+	}{
+		{
+			name:     "standard rate limit message",
+			err:      fmt.Errorf("Too Many Requests: retry after 5"),
+			wantSecs: 5,
+		},
+		{
+			name:     "rate limit with longer wait",
+			err:      fmt.Errorf("Too Many Requests: retry after 30"),
+			wantSecs: 30,
+		},
+		{
+			name:     "bad gateway — not a rate limit",
+			err:      fmt.Errorf("Bad Gateway"),
+			wantSecs: 0,
+		},
+		{
+			name:     "gateway timeout — not a rate limit",
+			err:      fmt.Errorf("Gateway Timeout"),
+			wantSecs: 0,
+		},
+		{
+			name:     "nil error",
+			err:      nil,
+			wantSecs: 0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseTelegramRetryAfter(tc.err)
+			want := time.Duration(tc.wantSecs) * time.Second
+			if got != want {
+				t.Errorf("parseTelegramRetryAfter(%v) = %v, want %v", tc.err, got, want)
+			}
+		})
 	}
 }

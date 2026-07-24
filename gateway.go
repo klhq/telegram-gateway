@@ -230,17 +230,27 @@ func (gw *Gateway) StartUpdateLoop(ctx context.Context) {
 					return
 				default:
 				}
-				// Exponential backoff: 1s, 2s, 4s … capped at 30s, with ±25% jitter
-				capSec := 30
-				backoffSec := 1 << backoffAttempt
-				if backoffSec > capSec {
-					backoffSec = capSec
+				// Honor Telegram's "Too Many Requests: retry after N" directive.
+				// If present, use that as the floor; otherwise exponential backoff
+				// capped at 30s with ±25% jitter.
+				var sleep time.Duration
+				if retryAfter := parseTelegramRetryAfter(err); retryAfter > 0 {
+					// Add a small buffer on top of Telegram's required wait
+					sleep = retryAfter + time.Second
+					// Don't increment backoffAttempt — this wasn't a transient failure
+				} else {
+					// Exponential backoff: 1s, 2s, 4s … capped at 30s, with ±25% jitter
+					capSec := 30
+					backoffSec := 1 << backoffAttempt
+					if backoffSec > capSec {
+						backoffSec = capSec
+					}
+					backoffBase := time.Duration(backoffSec) * time.Second
+					jitter := time.Duration(rand.Int63n(int64(backoffBase) / 4)) //nolint:gosec
+					sleep = backoffBase + jitter
+					backoffAttempt++
 				}
-				backoffBase := time.Duration(backoffSec) * time.Second
-				jitter := time.Duration(rand.Int63n(int64(backoffBase) / 4)) //nolint:gosec
-				sleep := backoffBase + jitter
 				slog.Error("Error getting updates from Telegram", "error", err, "retry_in", sleep)
-				backoffAttempt++
 				select {
 				case <-time.After(sleep):
 				case <-ctx.Done():
@@ -441,4 +451,31 @@ func (gw *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/health", gw.HandleHealth)
 	mux.Handle("/metrics", promhttp.Handler())
 	return mux
+}
+
+// parseTelegramRetryAfter extracts the wait duration from a Telegram
+// "Too Many Requests: retry after N" error. Returns 0 if not applicable.
+func parseTelegramRetryAfter(err error) time.Duration {
+	if err == nil {
+		return 0
+	}
+	msg := err.Error()
+	// Telegram sends "Too Many Requests: retry after N" where N is seconds
+	const prefix = "Too Many Requests: retry after "
+	idx := strings.Index(msg, prefix)
+	if idx == -1 {
+		return 0
+	}
+	numStr := strings.TrimSpace(msg[idx+len(prefix):])
+	// numStr may have trailing content; take only the leading integer
+	if i := strings.IndexFunc(numStr, func(r rune) bool {
+		return r < '0' || r > '9'
+	}); i != -1 {
+		numStr = numStr[:i]
+	}
+	n, parseErr := strconv.Atoi(numStr)
+	if parseErr != nil || n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Second
 }
