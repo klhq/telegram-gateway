@@ -18,6 +18,8 @@ func clearConfigEnvironment(t *testing.T) {
 		"GATEWAY_API_KEY_FILE",
 		"WEBHOOK_SECRET",
 		"WEBHOOK_SECRET_FILE",
+		"TELEGRAM_WEBHOOK_SECRET",
+		"TELEGRAM_WEBHOOK_SECRET_FILE",
 		"LOG_LEVEL",
 		"GLOBAL_RATE_LIMIT",
 		"CHAT_RATE_LIMIT",
@@ -25,6 +27,9 @@ func clearConfigEnvironment(t *testing.T) {
 		"BOOK_ARB_URL",
 		"ROUTES_JSON",
 		"ROUTES_FILE",
+		"MODE",
+		"WEBHOOK_URL",
+		"WEBHOOK_PATH",
 	} {
 		t.Setenv(name, "")
 	}
@@ -388,4 +393,48 @@ func TestLoadConfigReportsInvalidExternalSources(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadConfigWebhook(t *testing.T) {
+	t.Run("default mode is polling", func(t *testing.T) {
+		clearConfigEnvironment(t)
+		tempDir := t.TempDir()
+		configPath := filepath.Join(tempDir, "config.json")
+		_ = os.WriteFile(configPath, []byte(`{"telegram_bot_token":"token"}`), 0600)
+		cfg, err := LoadConfig(configPath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Mode != "polling" {
+			t.Errorf("expected mode 'polling', got %q", cfg.Mode)
+		}
+	})
+
+	t.Run("webhook mode requires webhook_url", func(t *testing.T) {
+		clearConfigEnvironment(t)
+		tempDir := t.TempDir()
+		configPath := filepath.Join(tempDir, "config.json")
+		_ = os.WriteFile(configPath, []byte(`{"telegram_bot_token":"token", "mode":"webhook"}`), 0600)
+		_, err := LoadConfig(configPath)
+		if err == nil || !strings.Contains(err.Error(), "webhook_url is required") {
+			t.Fatalf("expected error for missing webhook_url, got %v", err)
+		}
+	})
+
+	t.Run("valid webhook mode configuration", func(t *testing.T) {
+		clearConfigEnvironment(t)
+		tempDir := t.TempDir()
+		configPath := filepath.Join(tempDir, "config.json")
+		_ = os.WriteFile(configPath, []byte(`{"telegram_bot_token":"token", "mode":"webhook", "webhook_url":"https://example.com"}`), 0600)
+		cfg, err := LoadConfig(configPath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Mode != "webhook" {
+			t.Errorf("expected mode 'webhook', got %q", cfg.Mode)
+		}
+		if cfg.WebhookPath != "/webhook" {
+			t.Errorf("expected default WebhookPath '/webhook', got %q", cfg.WebhookPath)
+		}
+	})
 }

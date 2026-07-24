@@ -63,6 +63,7 @@ func main() {
 
 	slog.Info("Config loaded successfully",
 		"port", cfg.Port,
+		"mode", cfg.Mode,
 		"routes_count", len(cfg.Routes),
 		"telegram_bot_token", tokenDisplay,
 	)
@@ -88,6 +89,7 @@ func main() {
 			Timeout:   10 * time.Second, // fallback timeout for http client
 		},
 	}
+	gw.lastPollSuccess.Store(time.Now().Unix())
 
 	if cfg.GatewayAPIKey == "" {
 		if os.Getenv("INSECURE_DEV_MODE") != "true" {
@@ -113,8 +115,25 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start updates polling loop in background
-	go gw.StartUpdateLoop(ctx)
+	if strings.ToLower(cfg.Mode) == "webhook" {
+		fullWebhookURL := strings.TrimRight(cfg.WebhookURL, "/") + cfg.WebhookPath
+		slog.Info("Configuring Telegram Webhook...", "url", fullWebhookURL)
+
+		params := tgbotapi.Params{
+			"url": fullWebhookURL,
+		}
+		if cfg.TelegramWebhookSecret != "" {
+			params["secret_token"] = cfg.TelegramWebhookSecret
+		}
+		if _, err := bot.MakeRequest("setWebhook", params); err != nil {
+			slog.Error("Failed to register Telegram Webhook", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("Telegram Webhook registered successfully", "path", cfg.WebhookPath)
+	} else {
+		// Start updates polling loop in background
+		go gw.StartUpdateLoop(ctx)
+	}
 
 	// Start HTTP server in background
 	go func() {
