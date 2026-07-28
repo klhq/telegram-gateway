@@ -129,6 +129,12 @@ The gateway refuses to start without `GATEWAY_API_KEY`. Set `INSECURE_DEV_MODE=t
 
 ### Running the published image
 
+Published images are available from GitHub Container Registry as
+`ghcr.io/klhq/telegram-gateway` and Docker Hub as
+`docker.io/klhq/telegram-gateway`. Docker Hub publishing moved from the
+legacy `lazyskyline` namespace to `klhq`; update existing deployments to the
+new image name before their next upgrade.
+
 Download `compose.example.yaml`, `.env.example`, and `config.json.example` from this repository (or its release bundle) into an empty deployment directory, then create the local files:
 
 ```bash
