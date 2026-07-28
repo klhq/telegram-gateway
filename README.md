@@ -135,6 +135,18 @@ Published images are available from GitHub Container Registry as
 legacy `lazyskyline` namespace to `klhq`; update existing deployments to the
 new image name before their next upgrade.
 
+To pull from Docker Hub directly:
+
+```bash
+docker pull klhq/telegram-gateway:latest
+```
+
+For the Compose example, set the image in `.env`:
+
+```dotenv
+TELEGRAM_GATEWAY_IMAGE=docker.io/klhq/telegram-gateway:latest
+```
+
 Download `compose.example.yaml`, `.env.example`, and `config.json.example` from this repository (or its release bundle) into an empty deployment directory, then create the local files:
 
 ```bash
