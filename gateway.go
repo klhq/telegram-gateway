@@ -121,6 +121,7 @@ func (gw *Gateway) getChatLimiter(chatID int64) *rate.Limiter {
 // SendRequest represents the payload for POST /send
 type SendRequest struct {
 	ChatID                int64                          `json:"chat_id"`
+	MessageThreadID       int                            `json:"message_thread_id,omitempty"`
 	Text                  string                         `json:"text"`
 	ReplyMarkup           *tgbotapi.InlineKeyboardMarkup `json:"reply_markup,omitempty"`
 	ParseMode             string                         `json:"parse_mode,omitempty"`
@@ -213,6 +214,10 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 		gw.writeError(w, http.StatusBadRequest, "unsupported parse_mode")
 		return
 	}
+	if req.MessageThreadID < 0 {
+		gw.writeError(w, http.StatusBadRequest, "message_thread_id must be positive")
+		return
+	}
 
 	// Enforce global rate limit
 	ctx := r.Context()
@@ -246,7 +251,7 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	msg.DisableWebPagePreview = req.DisableWebPagePreview
 	msg.DisableNotification = req.DisableNotification
 
-	sentMsg, err := gw.Bot.Send(msg)
+	sentMsg, err := gw.sendMessage(msg, req.MessageThreadID)
 	if err != nil {
 		slog.Error("Error sending message via Telegram", "error", err, "chat_id", req.ChatID, "correlation_id", correlationID)
 		if retryAfter := parseTelegramRetryAfter(err); retryAfter > 0 {
@@ -267,6 +272,33 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
 	metricSendRequests.WithLabelValues("200").Inc()
+}
+
+// sendMessage sends msg, into a forum topic when threadID is set. The bot library's
+// MessageConfig has no thread field, so a topic send builds the request itself.
+func (gw *Gateway) sendMessage(msg tgbotapi.MessageConfig, threadID int) (tgbotapi.Message, error) {
+	if threadID == 0 {
+		return gw.Bot.Send(msg)
+	}
+
+	params := tgbotapi.Params{}
+	params.AddNonZero64("chat_id", msg.ChatID)
+	params.AddNonZero("message_thread_id", threadID)
+	params.AddNonEmpty("text", msg.Text)
+	params.AddNonEmpty("parse_mode", msg.ParseMode)
+	params.AddBool("disable_web_page_preview", msg.DisableWebPagePreview)
+	params.AddBool("disable_notification", msg.DisableNotification)
+	if err := params.AddInterface("reply_markup", msg.ReplyMarkup); err != nil {
+		return tgbotapi.Message{}, err
+	}
+
+	resp, err := gw.Bot.MakeRequest("sendMessage", params)
+	if err != nil {
+		return tgbotapi.Message{}, err
+	}
+	var sent tgbotapi.Message
+	err = json.Unmarshal(resp.Result, &sent)
+	return sent, err
 }
 
 // StartUpdateLoop starts the long-polling loop to get updates from Telegram

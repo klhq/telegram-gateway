@@ -203,6 +203,7 @@ Allows downstream services to send a message to a specific chat. If `gateway_api
 
 #### Request Schema
 * `chat_id` (Integer): Target chat. Defaults to `telegram_chat_id` if omitted.
+* `message_thread_id` (Integer, optional): Forum topic to post into, for a supergroup with topics enabled. When omitted, the message goes to the chat itself.
 * `text` (String): **Required.** Message content.
 * `parse_mode` (String, optional): Formatting style: `Markdown`, `HTML`, or `MarkdownV2`. When omitted, the gateway sends plain text.
 
