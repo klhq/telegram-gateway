@@ -132,6 +132,11 @@ components:
           format: int64
           description: Target chat ID. If omitted, defaults to the globally configured `telegram_chat_id`.
           example: 123456789
+        message_thread_id:
+          type: integer
+          minimum: 1
+          description: Optional forum topic to post into, for a supergroup with topics enabled. When omitted, the message goes to the chat itself.
+          example: 3
         text:
           type: string
           description: The message content to send.

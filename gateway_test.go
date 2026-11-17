@@ -202,6 +202,108 @@ func TestSendEndpointDefaultsToPlainText(t *testing.T) {
 	}
 }
 
+// sendToMockTelegram posts body to /send and returns the form Telegram received.
+func sendToMockTelegram(t *testing.T, body string) (*httptest.ResponseRecorder, map[string]string) {
+	t.Helper()
+	form := map[string]string{}
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/botmock-token/getMe" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":123456,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
+			return
+		}
+		if r.URL.Path != "/botmock-token/sendMessage" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("failed to parse form: %v", err)
+		}
+		for key := range r.Form {
+			form[key] = r.FormValue(key)
+		}
+		respBytes, _ := json.Marshal(tgbotapi.APIResponse{
+			Ok:     true,
+			Result: json.RawMessage(`{"message_id":999,"chat":{"id":-1001234,"type":"supergroup"},"date":1600000000}`),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(respBytes)
+	}))
+	defer telegramServer.Close()
+
+	bot, err := tgbotapi.NewBotAPIWithClient("mock-token", telegramServer.URL+"/bot%s/%s", http.DefaultClient)
+	if err != nil {
+		t.Fatalf("failed to create BotAPI: %v", err)
+	}
+	gw := &Gateway{Bot: bot, Config: &Config{TelegramBotToken: "mock-token", Port: "8000"}, Client: http.DefaultClient}
+
+	rr := httptest.NewRecorder()
+	gw.HandleSend(rr, httptest.NewRequest(http.MethodPost, "/send", strings.NewReader(body)))
+	return rr, form
+}
+
+func TestSendEndpointPassesMessageThreadID(t *testing.T) {
+	rr, form := sendToMockTelegram(t, `{
+		"chat_id": -1001234,
+		"message_thread_id": 3,
+		"text": "<b>topic</b>",
+		"parse_mode": "HTML",
+		"disable_web_page_preview": true,
+		"disable_notification": true,
+		"reply_markup": {"inline_keyboard": [[{"text": "Go", "callback_data": "receiver-a:go:1"}]]}
+	}`)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+	want := map[string]string{
+		"chat_id":                  "-1001234",
+		"message_thread_id":        "3",
+		"text":                     "<b>topic</b>",
+		"parse_mode":               "HTML",
+		"disable_web_page_preview": "true",
+		"disable_notification":     "true",
+	}
+	for key, value := range want {
+		if form[key] != value {
+			t.Errorf("expected %s %q, got %q", key, value, form[key])
+		}
+	}
+	if !strings.Contains(form["reply_markup"], `"callback_data":"receiver-a:go:1"`) {
+		t.Errorf("expected reply_markup to carry the button, got %q", form["reply_markup"])
+	}
+
+	var resp SendResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if resp.MessageID != 999 || resp.ChatID != -1001234 {
+		t.Errorf("unexpected response %+v", resp)
+	}
+}
+
+func TestSendEndpointOmitsMessageThreadIDByDefault(t *testing.T) {
+	rr, form := sendToMockTelegram(t, `{"chat_id":-1001234,"text":"plain"}`)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+	if value, ok := form["message_thread_id"]; ok {
+		t.Errorf("expected no message_thread_id, got %q", value)
+	}
+}
+
+func TestSendEndpointRejectsNegativeMessageThreadID(t *testing.T) {
+	rr, form := sendToMockTelegram(t, `{"chat_id":-1001234,"message_thread_id":-1,"text":"plain"}`)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+	if len(form) != 0 {
+		t.Errorf("expected nothing sent to Telegram, got %v", form)
+	}
+}
+
 func TestSendEndpointRejectsUnsupportedParseMode(t *testing.T) {
 	gw := &Gateway{Config: &Config{TelegramBotToken: "mock-token", Port: "8000"}}
 	req := httptest.NewRequest(http.MethodPost, "/send", strings.NewReader(`{"chat_id":123456789,"text":"message","parse_mode":"PlainText"}`))
