@@ -17,7 +17,7 @@ import (
 
 func main() {
 	// Initialize structured logging (JSON handler by default for production)
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := slog.New(newLogHandler(os.Stdout, slog.LevelInfo))
 	slog.SetDefault(logger)
 
 	slog.Info("Starting Telegram Gateway...")
@@ -51,7 +51,7 @@ func main() {
 	default:
 		level = slog.LevelInfo
 	}
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
+	slog.SetDefault(slog.New(newLogHandler(os.Stdout, level)))
 
 	// Safe printing of token
 	tokenDisplay := "not set"

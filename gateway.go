@@ -256,7 +256,7 @@ func (gw *Gateway) HandleSend(w http.ResponseWriter, r *http.Request) {
 		slog.Error("Error sending message via Telegram", "error", err, "chat_id", req.ChatID, "correlation_id", correlationID)
 		if retryAfter := parseTelegramRetryAfter(err); retryAfter > 0 {
 			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
-			gw.writeError(w, http.StatusTooManyRequests, err.Error())
+			gw.writeError(w, http.StatusTooManyRequests, redactBotToken(err.Error()))
 			return
 		}
 		gw.writeError(w, http.StatusInternalServerError, "Failed to send message")
